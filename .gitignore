@@ -1,0 +1,15 @@
+# IDE / SO
+.github
+.vscode
+.DS_Store
+**/.DS_Store
+
+# Datos sensibles y artefactos pesados
+capa
+Wallet_bdPulsoCareTADS
+capa_oracledb.zip
+Wallet_bdPulsoCareTADS.zip
+lambda/capa_oracledb_linux.zip
+
+# Build de Maven
+target/
