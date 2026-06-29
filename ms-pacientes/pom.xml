@@ -12,9 +12,9 @@
   </parent>
 
   <groupId>cl.pulsocare</groupId>
-  <artifactId>pacientes-service</artifactId>
+  <artifactId>ms-pacientes</artifactId>
   <version>1.0.0</version>
-  <name>pacientes-service</name>
+  <name>ms-pacientes</name>
   <description>PulsoCare - microservicio de pacientes (CRUD + asignacion de subject_id)</description>
 
   <properties>

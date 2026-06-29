@@ -1,4 +1,4 @@
-# PulsoCare — notification-service (Spring Boot)
+# PulsoCare — ms-notification (Spring Boot)
 
 Worker que cierra la cadena de notificaciones del *hot path*:
 
@@ -50,7 +50,7 @@ export AWS_REGION=us-east-1
 export SQS_QUEUE_URL='https://sqs.us-east-1.amazonaws.com/<cuenta>/pulsocare-alertas'
 export SNS_TOPIC_ARN='arn:aws:sns:us-east-1:<cuenta>:pulsocare-notificaciones'
 
-java -jar target/notification-service-1.0.0.jar
+java -jar target/ms-notification-1.0.0.jar
 ```
 Queda escuchando SQS (long polling). Detener con Ctrl+C.
 

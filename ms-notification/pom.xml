@@ -12,9 +12,9 @@
   </parent>
 
   <groupId>cl.pulsocare</groupId>
-  <artifactId>notification-service</artifactId>
+  <artifactId>ms-notification</artifactId>
   <version>1.0.0</version>
-  <name>notification-service</name>
+  <name>ms-notification</name>
   <description>PulsoCare - consume alertas de SQS y notifica por SNS (email)</description>
 
   <properties>
