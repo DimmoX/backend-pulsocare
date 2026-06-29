@@ -1,4 +1,4 @@
-# PulsoCare — pacientes-service (Spring Boot)
+# PulsoCare — ms-pacientes (Spring Boot)
 
 Microservicio REST del *cold path* para administrar pacientes. Al crear un
 paciente sin `subject_id`, le **asigna uno aleatorio del pool de MIMIC-IV**
@@ -38,7 +38,7 @@ curl -X POST http://localhost:8081/api/pacientes -H 'Content-Type: application/j
 mvn -q package -DskipTests
 export DB_USER=ADMIN DB_PASSWORD='...' DB_DSN=bdpulsocaretads_low
 export WALLET_DIR="/ruta/a/Wallet_bdPulsoCareTADS"
-java -jar target/pacientes-service-1.0.0.jar
+java -jar target/ms-pacientes-1.0.0.jar
 ```
 
 ## Notas
