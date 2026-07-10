@@ -1,0 +1,62 @@
+# ==========================================================================
+# PulsoCare ms-gateway
+# --------------------------------------------------------------------------
+# Las URIs de destino se parametrizan por variable de entorno: en local usan
+# localhost (valores por defecto); en docker-compose se sobreescriben con el
+# nombre del servicio (p. ej. http://ms-auth:8082).
+# ==========================================================================
+spring:
+  application:
+    name: ms-gateway
+  cloud:
+    gateway:
+      # El orden importa: las rutas mas especificas van antes que la generica
+      # de pacientes (de lo contrario /api/pacientes/{id}/lecturas nunca llega
+      # a ms-consultas).
+      routes:
+        - id: auth
+          uri: ${MS_AUTH_URI:http://localhost:8082}
+          predicates:
+            - Path=/api/auth/**
+
+        - id: umbrales
+          uri: ${MS_CONFIG_URI:http://localhost:8083}
+          predicates:
+            - Path=/api/umbrales/**
+
+        - id: alertas
+          uri: ${MS_CONSULTAS_URI:http://localhost:8084}
+          predicates:
+            - Path=/api/alertas/**
+
+        - id: lecturas
+          uri: ${MS_CONSULTAS_URI:http://localhost:8084}
+          predicates:
+            - Path=/api/pacientes/*/lecturas/**
+
+        - id: usuarios
+          uri: ${MS_PACIENTES_URI:http://localhost:8081}
+          predicates:
+            - Path=/api/usuarios/**
+
+        - id: pacientes
+          uri: ${MS_PACIENTES_URI:http://localhost:8081}
+          predicates:
+            - Path=/api/pacientes/**
+
+      # CORS para que el frontend Angular (dev server) pueda llamar al gateway.
+      globalcors:
+        cors-configurations:
+          '[/**]':
+            allowedOrigins:
+              - ${FRONTEND_ORIGIN:http://localhost:4200}
+            allowedMethods: [GET, POST, PUT, DELETE, OPTIONS]
+            allowedHeaders: [authorization, content-type]
+            allowCredentials: true
+
+server:
+  port: ${SERVER_PORT:8080}
+
+logging:
+  level:
+    cl.pulsocare: INFO
