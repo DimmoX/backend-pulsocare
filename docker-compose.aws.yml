@@ -1,0 +1,92 @@
+# ==========================================================================
+# PulsoCare - pila para la instancia EC2 (AWS)
+# --------------------------------------------------------------------------
+# Corre el backend completo en el EC2. Delante va el AWS API Gateway, que
+# reenvia todo (ANY /{proxy+}) a http://<ec2>:8080/{proxy} -> este ms-gateway.
+#
+# Diferencias con docker-compose.local.yml:
+#   - ms-notification SI arranca (es parte del hot path en AWS).
+#   - Las credenciales de AWS NO van en .env: las provee el rol de instancia
+#     (LabRole via instance profile). El SDK las toma del metadata del EC2.
+#   - El CORS lo sigue manejando el ms-gateway; NO configures CORS en el API
+#     Gateway (se duplicarian las cabeceras).
+#
+# Uso en el EC2:
+#   cp .env.example .env   # completar DB_PASSWORD, SQS_QUEUE_URL, SNS_TOPIC_ARN, FRONTEND_ORIGIN
+#   docker compose -f docker-compose.aws.yml up -d --build
+# ==========================================================================
+name: pulsocare-aws
+
+x-oracle-env: &oracle-env
+  DB_USER: ${DB_USER:-ADMIN}
+  DB_PASSWORD: ${DB_PASSWORD}
+  DB_DSN: ${DB_DSN:-bdpulsocaretads_low}
+  WALLET_DIR: /wallet
+
+x-wallet-volume: &wallet-volume
+  - ./Wallet_bdPulsoCareTADS:/wallet:ro
+
+services:
+  ms-auth:
+    build: ./ms-auth
+    environment:
+      <<: *oracle-env
+      SERVER_PORT: 8082
+    volumes: *wallet-volume
+    restart: unless-stopped
+
+  ms-pacientes:
+    build: ./ms-pacientes
+    environment:
+      <<: *oracle-env
+      SERVER_PORT: 8081
+    volumes: *wallet-volume
+    restart: unless-stopped
+
+  ms-config:
+    build: ./ms-config
+    environment:
+      <<: *oracle-env
+      SERVER_PORT: 8083
+    volumes: *wallet-volume
+    restart: unless-stopped
+
+  ms-consultas:
+    build: ./ms-consultas
+    environment:
+      <<: *oracle-env
+      SERVER_PORT: 8084
+    volumes: *wallet-volume
+    restart: unless-stopped
+
+  # Worker del hot path: consume SQS y notifica por SNS. Toma las credenciales
+  # de AWS del rol de instancia (no van en .env). Requiere el nombre de la cola
+  # y el topico, que si vienen del entorno.
+  ms-notification:
+    build: ./ms-notification
+    environment:
+      <<: *oracle-env
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      SQS_QUEUE_URL: ${SQS_QUEUE_URL}
+      SNS_TOPIC_ARN: ${SNS_TOPIC_ARN}
+    volumes: *wallet-volume
+    restart: unless-stopped
+
+  # Puerta de entrada del EC2: el AWS API Gateway apunta aqui (puerto 8080).
+  ms-gateway:
+    build: ./ms-gateway
+    environment:
+      SERVER_PORT: 8080
+      MS_AUTH_URI: http://ms-auth:8082
+      MS_PACIENTES_URI: http://ms-pacientes:8081
+      MS_CONFIG_URI: http://ms-config:8083
+      MS_CONSULTAS_URI: http://ms-consultas:8084
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:4200}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - ms-auth
+      - ms-pacientes
+      - ms-config
+      - ms-consultas
+    restart: unless-stopped
