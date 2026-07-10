@@ -1,0 +1,94 @@
+# ==========================================================================
+# PulsoCare - pila LOCAL de pruebas
+# --------------------------------------------------------------------------
+# Levanta todo el backend en tu maquina, sin depender del AWS API Gateway.
+# El frontend apunta su environment.apiUrl a http://localhost:8080/api
+#
+# Uso:
+#   1) copia .env.example a .env y completa DB_PASSWORD
+#   2) docker compose -f docker-compose.local.yml up --build
+#
+# El worker de notificaciones NO arranca por defecto (necesita credenciales
+# AWS). Para incluirlo:
+#   docker compose -f docker-compose.local.yml --profile notificaciones up --build
+# ==========================================================================
+name: pulsocare-local
+
+# Config comun de Oracle (los 4 servicios REST + el worker la comparten).
+x-oracle-env: &oracle-env
+  DB_USER: ${DB_USER:-ADMIN}
+  DB_PASSWORD: ${DB_PASSWORD}
+  DB_DSN: ${DB_DSN:-bdpulsocaretads_low}
+  WALLET_DIR: /wallet
+
+# El wallet se monta como volumen read-only (nunca dentro de la imagen).
+x-wallet-volume: &wallet-volume
+  - ./Wallet_bdPulsoCareTADS:/wallet:ro
+
+services:
+  ms-auth:
+    build: ./ms-auth
+    environment:
+      <<: *oracle-env
+      SERVER_PORT: 8082
+    volumes: *wallet-volume
+    restart: unless-stopped
+
+  ms-pacientes:
+    build: ./ms-pacientes
+    environment:
+      <<: *oracle-env
+      SERVER_PORT: 8081
+    volumes: *wallet-volume
+    restart: unless-stopped
+
+  ms-config:
+    build: ./ms-config
+    environment:
+      <<: *oracle-env
+      SERVER_PORT: 8083
+    volumes: *wallet-volume
+    restart: unless-stopped
+
+  ms-consultas:
+    build: ./ms-consultas
+    environment:
+      <<: *oracle-env
+      SERVER_PORT: 8084
+    volumes: *wallet-volume
+    restart: unless-stopped
+
+  # Puerta de entrada: unico servicio que publica puerto al host.
+  ms-gateway:
+    build: ./ms-gateway
+    environment:
+      SERVER_PORT: 8080
+      MS_AUTH_URI: http://ms-auth:8082
+      MS_PACIENTES_URI: http://ms-pacientes:8081
+      MS_CONFIG_URI: http://ms-config:8083
+      MS_CONSULTAS_URI: http://ms-consultas:8084
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:4200}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - ms-auth
+      - ms-pacientes
+      - ms-config
+      - ms-consultas
+    restart: unless-stopped
+
+  # Worker del hot path (SQS -> SNS email). Requiere credenciales AWS.
+  # Opcional en local: solo arranca con --profile notificaciones.
+  ms-notification:
+    build: ./ms-notification
+    profiles: ["notificaciones"]
+    environment:
+      <<: *oracle-env
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN}
+      SQS_QUEUE_URL: ${SQS_QUEUE_URL}
+      SNS_TOPIC_ARN: ${SNS_TOPIC_ARN}
+    volumes: *wallet-volume
+    restart: unless-stopped
