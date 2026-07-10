@@ -13,3 +13,6 @@ lambda/capa_oracledb_linux.zip
 
 # Build de Maven
 target/
+
+# Variables de entorno (secretos): se versiona solo .env.example
+.env
