@@ -37,6 +37,12 @@
       <artifactId>spring-boot-starter-validation</artifactId>
     </dependency>
 
+    <!-- Cache Redis (ElastiCache): ventana reciente de lecturas para el dashboard -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-redis</artifactId>
+    </dependency>
+
     <!-- Oracle JDBC + soporte de wallet (cwallet.sso) para Autonomous DB -->
     <dependency>
       <groupId>com.oracle.database.jdbc</groupId>
