@@ -1,5 +1,6 @@
 package cl.pulsocare.consultas.service;
 
+import cl.pulsocare.consultas.cache.CacheLecturas;
 import cl.pulsocare.consultas.model.Lectura;
 import cl.pulsocare.consultas.repo.LecturaRepository;
 import org.springframework.beans.factory.annotation.Value;
@@ -12,11 +13,14 @@ import java.util.List;
 public class LecturaService {
 
     private final LecturaRepository repo;
+    private final CacheLecturas cache;
     private final int limiteMaximo;
 
     public LecturaService(LecturaRepository repo,
+                          CacheLecturas cache,
                           @Value("${pulsocare.consultas.limite-maximo:1000}") int limiteMaximo) {
         this.repo = repo;
+        this.cache = cache;
         this.limiteMaximo = limiteMaximo;
     }
 
@@ -27,7 +31,15 @@ public class LecturaService {
         return repo.historico(idPaciente, idSignoVital, desde, hasta, efectivo);
     }
 
+    /**
+     * Ultima lectura de cada signo (tiles del dashboard). Cache-aside: intenta
+     * el cache (ElastiCache); si no esta, consulta Oracle y lo cachea.
+     */
     public List<Lectura> ultimas(long idPaciente) {
-        return repo.ultimasPorSigno(idPaciente);
+        return cache.ultimas(idPaciente).orElseGet(() -> {
+            List<Lectura> desdeOracle = repo.ultimasPorSigno(idPaciente);
+            cache.guardarUltimas(idPaciente, desdeOracle);
+            return desdeOracle;
+        });
     }
 }
