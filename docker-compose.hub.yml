@@ -1,0 +1,86 @@
+# ==========================================================================
+# PulsoCare - pila del EC2 que DESCARGA las imagenes desde Docker Hub.
+# (La variante docker-compose.aws.yml construye en la instancia; esta hace pull.)
+# La usa el pipeline de CI/CD: copia este archivo a ~/backend y hace pull + up.
+#
+# Requiere en la instancia:
+#   ~/backend/.env                  (DOCKERHUB_USER, DB_PASSWORD, SQS/SNS, ...)
+#   ~/backend/Wallet_bdPulsoCareTADS (wallet de Oracle, montado como volumen)
+# ==========================================================================
+name: pulsocare-aws
+
+x-oracle-env: &oracle-env
+  DB_USER: ${DB_USER:-ADMIN}
+  DB_PASSWORD: ${DB_PASSWORD}
+  DB_DSN: ${DB_DSN:-bdpulsocaretads_low}
+  WALLET_DIR: /wallet
+
+x-wallet-volume: &wallet-volume
+  - ./Wallet_bdPulsoCareTADS:/wallet:ro
+
+services:
+  ms-auth:
+    image: ${DOCKERHUB_USER}/pulsocare-ms-auth:latest
+    environment:
+      <<: *oracle-env
+      SERVER_PORT: 8082
+    volumes: *wallet-volume
+    restart: unless-stopped
+
+  ms-pacientes:
+    image: ${DOCKERHUB_USER}/pulsocare-ms-pacientes:latest
+    environment:
+      <<: *oracle-env
+      SERVER_PORT: 8081
+    volumes: *wallet-volume
+    restart: unless-stopped
+
+  ms-config:
+    image: ${DOCKERHUB_USER}/pulsocare-ms-config:latest
+    environment:
+      <<: *oracle-env
+      SERVER_PORT: 8083
+    volumes: *wallet-volume
+    restart: unless-stopped
+
+  ms-consultas:
+    image: ${DOCKERHUB_USER}/pulsocare-ms-consultas:latest
+    environment:
+      <<: *oracle-env
+      SERVER_PORT: 8084
+      # Cache ElastiCache (Redis) en modo cluster + TLS.
+      CACHE_ENABLED: ${CACHE_ENABLED:-false}
+      REDIS_HOST: ${REDIS_HOST:-}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_CLUSTER: ${REDIS_CLUSTER:-false}
+      REDIS_SSL: ${REDIS_SSL:-false}
+    volumes: *wallet-volume
+    restart: unless-stopped
+
+  ms-notification:
+    image: ${DOCKERHUB_USER}/pulsocare-ms-notification:latest
+    environment:
+      <<: *oracle-env
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      SQS_QUEUE_URL: ${SQS_QUEUE_URL}
+      SNS_TOPIC_ARN: ${SNS_TOPIC_ARN}
+    volumes: *wallet-volume
+    restart: unless-stopped
+
+  ms-gateway:
+    image: ${DOCKERHUB_USER}/pulsocare-ms-gateway:latest
+    environment:
+      SERVER_PORT: 8080
+      MS_AUTH_URI: http://ms-auth:8082
+      MS_PACIENTES_URI: http://ms-pacientes:8081
+      MS_CONFIG_URI: http://ms-config:8083
+      MS_CONSULTAS_URI: http://ms-consultas:8084
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:4200}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - ms-auth
+      - ms-pacientes
+      - ms-config
+      - ms-consultas
+    restart: unless-stopped
