@@ -13,6 +13,8 @@ jobs:
   # ----------------------------------------------------------------------
   build-push:
     runs-on: ubuntu-latest
+    # Los secrets viven en el environment env_ms_pulsocare; el job debe declararlo.
+    environment: env_ms_pulsocare
     strategy:
       matrix:
         service: [ ms-auth, ms-pacientes, ms-config, ms-consultas, ms-notification, ms-gateway ]
@@ -45,6 +47,8 @@ jobs:
   deploy:
     needs: build-push
     runs-on: ubuntu-latest
+    # Los secrets AWS/EC2 tambien viven en env_ms_pulsocare.
+    environment: env_ms_pulsocare
     steps:
       - name: Configurar credenciales de AWS (temporales del lab)
         uses: aws-actions/configure-aws-credentials@v4
