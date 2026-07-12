@@ -8,16 +8,50 @@ on:
 
 jobs:
   # ----------------------------------------------------------------------
-  # 1) Construye y publica las 6 imagenes (una por microservicio) en Docker Hub.
-  #    Sin secretos en las imagenes: la config va en el .env de la instancia.
+  # 1) Detecta QUE microservicios cambiaron en el push.
+  #    - push: solo los servicios con cambios en su carpeta.
+  #    - workflow_dispatch (manual): los 6 (despliegue completo).
+  # ----------------------------------------------------------------------
+  detectar:
+    runs-on: ubuntu-latest
+    outputs:
+      servicios: ${{ steps.salida.outputs.servicios }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detectar carpetas cambiadas
+        uses: dorny/paths-filter@v3
+        id: cambios
+        with:
+          filters: |
+            ms-auth: 'ms-auth/**'
+            ms-pacientes: 'ms-pacientes/**'
+            ms-config: 'ms-config/**'
+            ms-consultas: 'ms-consultas/**'
+            ms-notification: 'ms-notification/**'
+            ms-gateway: 'ms-gateway/**'
+
+      - name: Armar la lista de servicios a construir
+        id: salida
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo 'servicios=["ms-auth","ms-pacientes","ms-config","ms-consultas","ms-notification","ms-gateway"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'servicios=${{ steps.cambios.outputs.changes }}' >> "$GITHUB_OUTPUT"
+          fi
+
+  # ----------------------------------------------------------------------
+  # 2) Construye y publica SOLO las imagenes de los servicios que cambiaron.
   # ----------------------------------------------------------------------
   build-push:
+    needs: detectar
+    if: needs.detectar.outputs.servicios != '[]'
     runs-on: ubuntu-latest
-    # Los secrets viven en el environment env_ms_pulsocare; el job debe declararlo.
     environment: env_ms_pulsocare
     strategy:
       matrix:
-        service: [ ms-auth, ms-pacientes, ms-config, ms-consultas, ms-notification, ms-gateway ]
+        service: ${{ fromJSON(needs.detectar.outputs.servicios) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -40,14 +74,14 @@ jobs:
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/pulsocare-${{ matrix.service }}:latest
 
   # ----------------------------------------------------------------------
-  # 2) Despliega en la EC2 por AWS SSM (sin SSH, sin llave privada).
-  #    Requisito previo (una vez, por SSH restringido a tu IP): la instancia
-  #    con Docker, ~/backend/docker-compose.hub.yml, ~/backend/.env y el wallet.
+  # 3) Despliega en la EC2 por SSM. `docker compose up -d` recrea SOLO los
+  #    contenedores cuya imagen cambio (los que no se re-empujaron quedan
+  #    corriendo intactos) -> despliegue independiente por servicio.
   # ----------------------------------------------------------------------
   deploy:
-    needs: build-push
+    needs: [detectar, build-push]
+    if: needs.detectar.outputs.servicios != '[]'
     runs-on: ubuntu-latest
-    # Los secrets AWS/EC2 tambien viven en env_ms_pulsocare.
     environment: env_ms_pulsocare
     steps:
       - name: Configurar credenciales de AWS (temporales del lab)
@@ -68,7 +102,6 @@ jobs:
             --query "Command.CommandId" --output text)
           echo "CommandId: $CMD_ID"
 
-          # Espera a que el comando termine en la instancia.
           aws ssm wait command-executed \
             --command-id "$CMD_ID" \
             --instance-id "${{ secrets.EC2_INSTANCE_ID }}" || true
