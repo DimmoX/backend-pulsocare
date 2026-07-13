@@ -1,5 +1,6 @@
 package cl.pulsocare.auth.service;
 
+import cl.pulsocare.auth.b2c.GraphB2cService;
 import cl.pulsocare.auth.dto.LoginRequest;
 import cl.pulsocare.auth.dto.RegistroRequest;
 import cl.pulsocare.auth.model.Usuario;
@@ -21,17 +22,24 @@ public class AuthService {
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
 
     private final UsuarioRepository repo;
+    private final GraphB2cService graph;
 
     @Value("${pulsocare.auth.rol-por-defecto:3}")
     private long rolPorDefecto;
 
-    public AuthService(UsuarioRepository repo) {
+    public AuthService(UsuarioRepository repo, GraphB2cService graph) {
         this.repo = repo;
+        this.graph = graph;
     }
 
     /**
-     * Registra o sincroniza al usuario que llega desde Azure Entra ID.
-     * Idempotente: si el correo ya existe, actualiza nombre/telefono/contrasena.
+     * Registra o sincroniza un usuario. Dos escenarios, distinguidos por el
+     * entraOid del payload:
+     *  - Sincronizacion de login (trae entraOid): el usuario ya existe en B2C;
+     *    solo se hace upsert por correo en Oracle.
+     *  - Creacion por el admin (sin entraOid) y usuario nuevo: ademas de Oracle,
+     *    se crea la cuenta en Azure B2C (via Graph) y se devuelve la contrasena
+     *    temporal para que el admin se la entregue al usuario.
      */
     public Usuario registrar(RegistroRequest req) {
         String[] nombre = separarNombre(req.displayName());
@@ -40,13 +48,37 @@ public class AuthService {
         if (repo.existeCorreo(req.correo())) {
             repo.actualizarSincronizacion(req.correo(), nombre[0], nombre[1], req.telefono(), hash);
             log.info("Usuario sincronizado: {}", req.correo());
-        } else {
-            long idRol = req.idRol() != null ? req.idRol() : rolPorDefecto;
-            repo.insertar(idRol, nombre[0], nombre[1], req.correo(),
-                    req.telefono(), req.entraOid(), req.idParentesco(), hash);
-            log.info("Usuario registrado: {} (rol {})", req.correo(), idRol);
+            return repo.buscarPorCorreo(req.correo()).orElseThrow();
         }
-        return repo.buscarPorCorreo(req.correo()).orElseThrow();
+
+        long idRol = req.idRol() != null ? req.idRol() : rolPorDefecto;
+
+        // Creacion por el admin (sin entraOid): crear tambien la cuenta en B2C.
+        String entraOid = req.entraOid();
+        String passwordTemporal = null;
+        boolean creacionAdmin = (entraOid == null || entraOid.isBlank());
+        if (creacionAdmin && graph.estaHabilitado()) {
+            var resultado = graph.crearUsuario(req.displayName(), req.correo(), rolAJobTitle(idRol));
+            entraOid = resultado.oid();
+            passwordTemporal = resultado.passwordTemporal();
+        }
+
+        repo.insertar(idRol, nombre[0], nombre[1], req.correo(),
+                req.telefono(), entraOid, req.idParentesco(), hash);
+        log.info("Usuario registrado: {} (rol {}, b2c={})", req.correo(), idRol, passwordTemporal != null);
+
+        Usuario usuario = repo.buscarPorCorreo(req.correo()).orElseThrow();
+        return passwordTemporal == null ? usuario : usuario.conPassword(passwordTemporal);
+    }
+
+    /** Rol (PC_ROL) -> jobTitle de B2C, que el frontend usa para resolver el rol. */
+    private static String rolAJobTitle(long idRol) {
+        return switch ((int) idRol) {
+            case 1 -> "Medico";
+            case 2 -> "Enfermero";
+            case 4 -> "Administrador";
+            default -> "Familiar";
+        };
     }
 
     /** Autentica por correo + contrasena. */

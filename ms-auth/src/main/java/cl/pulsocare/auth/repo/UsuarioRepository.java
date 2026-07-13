@@ -37,7 +37,8 @@ public class UsuarioRepository {
             rs.getString("TELEFONO"),
             rs.getString("ENTRA_OID"),
             nullableLong(rs, "ID_PARENTESCO"),
-            rs.getString("ESTADO"));
+            rs.getString("ESTADO"),
+            null);   // passwordTemporal: solo se rellena al crear via B2C
 
     public List<Usuario> listar() {
         return jdbc.query(SELECT + "ORDER BY u.ID_USUARIO", MAPPER);
