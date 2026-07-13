@@ -4,6 +4,7 @@ import cl.pulsocare.auth.b2c.GraphB2cService;
 import cl.pulsocare.auth.dto.LoginRequest;
 import cl.pulsocare.auth.dto.RegistroRequest;
 import cl.pulsocare.auth.model.Usuario;
+import cl.pulsocare.auth.notificacion.SnsSuscripcionService;
 import cl.pulsocare.auth.repo.UsuarioRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,13 +24,15 @@ public class AuthService {
 
     private final UsuarioRepository repo;
     private final GraphB2cService graph;
+    private final SnsSuscripcionService sns;
 
     @Value("${pulsocare.auth.rol-por-defecto:3}")
     private long rolPorDefecto;
 
-    public AuthService(UsuarioRepository repo, GraphB2cService graph) {
+    public AuthService(UsuarioRepository repo, GraphB2cService graph, SnsSuscripcionService sns) {
         this.repo = repo;
         this.graph = graph;
+        this.sns = sns;
     }
 
     /**
@@ -68,7 +71,19 @@ public class AuthService {
         log.info("Usuario registrado: {} (rol {}, b2c={})", req.correo(), idRol, passwordTemporal != null);
 
         Usuario usuario = repo.buscarPorCorreo(req.correo()).orElseThrow();
+
+        // Suscribir su correo al topic de alertas (filtrado por id_usuario) para
+        // que reciba las alertas de sus pacientes. Solo roles que son cuidadores.
+        if (esRolCuidador(idRol)) {
+            sns.suscribir(usuario.idUsuario(), usuario.correo());
+        }
+
         return passwordTemporal == null ? usuario : usuario.conPassword(passwordTemporal);
+    }
+
+    /** Roles que pueden ser equipo de cuidado (reciben alertas): Medico, Enfermero, Familiar. */
+    private static boolean esRolCuidador(long idRol) {
+        return idRol == 1 || idRol == 2 || idRol == 3;
     }
 
     /** Rol (PC_ROL) -> jobTitle de B2C, que el frontend usa para resolver el rol. */
