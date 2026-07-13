@@ -24,6 +24,12 @@ services:
     environment:
       <<: *oracle-env
       SERVER_PORT: 8082
+      # Azure AD B2C: crear usuarios via Microsoft Graph al registrarlos el admin.
+      B2C_ENABLED: ${B2C_ENABLED:-false}
+      GRAPH_TENANT_ID: ${GRAPH_TENANT_ID:-}
+      GRAPH_CLIENT_ID: ${GRAPH_CLIENT_ID:-}
+      GRAPH_CLIENT_SECRET: ${GRAPH_CLIENT_SECRET:-}
+      GRAPH_ISSUER_DOMAIN: ${GRAPH_ISSUER_DOMAIN:-pulsocareduoc.onmicrosoft.com}
     volumes: *wallet-volume
     restart: unless-stopped
 
