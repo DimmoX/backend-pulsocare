@@ -30,6 +30,10 @@ services:
       GRAPH_CLIENT_ID: ${GRAPH_CLIENT_ID:-}
       GRAPH_CLIENT_SECRET: ${GRAPH_CLIENT_SECRET:-}
       GRAPH_ISSUER_DOMAIN: ${GRAPH_ISSUER_DOMAIN:-pulsocareduoc.onmicrosoft.com}
+      # SNS: suscribir el correo del usuario a las alertas al crearlo (credenciales via LabRole).
+      SNS_SUBSCRIBE_ENABLED: ${SNS_SUBSCRIBE_ENABLED:-false}
+      SNS_TOPIC_ARN: ${SNS_TOPIC_ARN:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
     volumes: *wallet-volume
     restart: unless-stopped
 
