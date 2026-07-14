@@ -15,3 +15,7 @@ target/
 
 # Variables de entorno (secretos): se versiona solo .env.example
 .env
+
+# Python (tests de la lambda)
+__pycache__/
+.pytest_cache/
