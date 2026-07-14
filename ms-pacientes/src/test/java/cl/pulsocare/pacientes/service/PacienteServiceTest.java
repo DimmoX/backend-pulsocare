@@ -56,6 +56,8 @@ class PacienteServiceTest {
         ArgumentCaptor<Paciente> captor = ArgumentCaptor.forClass(Paciente.class);
         verify(repo).insertar(captor.capture());
         assertThat(captor.getValue().subjectId()).isEqualTo(10031757L);
+        // Todo paciente nuevo debe nacer con sus umbrales por defecto.
+        verify(repo).crearUmbralesPorDefecto(41L);
     }
 
     @Test

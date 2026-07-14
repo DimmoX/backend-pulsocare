@@ -11,6 +11,7 @@ import java.sql.Date;
 import java.sql.PreparedStatement;
 import java.sql.Statement;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
@@ -90,6 +91,29 @@ public class PacienteRepository {
                 ? (Number) kh.getKeys().values().iterator().next()
                 : kh.getKey();
         return key.longValue();
+    }
+
+    // Umbrales clinicos por defecto (mismos rangos que la Lambda y el seed):
+    // {id_signo_vital, valor_min, valor_max, valor_min_critico, valor_max_critico}.
+    private static final double[][] UMBRALES_DEFECTO = {
+            {1, 60, 100, 40, 130},    // Frecuencia cardiaca (bpm)
+            {2, 95, 100, 90, 100},    // Saturacion de oxigeno (%)
+            {3, 90, 120, 70, 180},    // Presion sistolica (mmHg)
+            {4, 60, 80, 40, 110},     // Presion diastolica (mmHg)
+            {5, 36, 37.5, 35, 39},    // Temperatura (C)
+            {6, 12, 20, 8, 30},       // Frecuencia respiratoria (insp/min)
+    };
+
+    /** Crea los 6 umbrales por defecto para un paciente recien dado de alta. */
+    public void crearUmbralesPorDefecto(long idPaciente) {
+        List<Object[]> filas = new ArrayList<>();
+        for (double[] u : UMBRALES_DEFECTO) {
+            filas.add(new Object[]{idPaciente, (long) u[0], u[1], u[2], u[3], u[4]});
+        }
+        jdbc.batchUpdate(
+                "INSERT INTO PC_UMBRAL (ID_PACIENTE, ID_SIGNO_VITAL, VALOR_MIN, VALOR_MAX, " +
+                "VALOR_MIN_CRITICO, VALOR_MAX_CRITICO) VALUES (?, ?, ?, ?, ?, ?)",
+                filas);
     }
 
     public int actualizar(long id, Paciente p) {
