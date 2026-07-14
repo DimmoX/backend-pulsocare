@@ -15,6 +15,16 @@ x-oracle-env: &oracle-env
   DB_DSN: ${DB_DSN:-bdpulsocaretads_low}
   WALLET_DIR: /wallet
 
+# Pool de conexiones acotado: la Autonomous DB comparte su limite de sesiones
+# entre todos los microservicios. 5 servicios x DB_POOL_MAX(=3) = 15 conexiones.
+# Spring Boot enlaza estas variables de forma nativa (funciona sin reconstruir).
+x-hikari-env: &hikari-env
+  SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: ${DB_POOL_MAX:-3}
+  SPRING_DATASOURCE_HIKARI_MINIMUM_IDLE: 1
+  SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT: 30000
+  SPRING_DATASOURCE_HIKARI_MAX_LIFETIME: 280000
+  SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT: 20000
+
 x-wallet-volume: &wallet-volume
   - ./Wallet_bdPulsoCareTADS:/wallet:ro
 
@@ -22,7 +32,7 @@ services:
   ms-auth:
     image: ${DOCKERHUB_USER}/pulsocare-ms-auth:latest
     environment:
-      <<: *oracle-env
+      <<: [*oracle-env, *hikari-env]
       SERVER_PORT: 8082
       # Azure AD B2C: crear usuarios via Microsoft Graph al registrarlos el admin.
       B2C_ENABLED: ${B2C_ENABLED:-false}
@@ -40,7 +50,7 @@ services:
   ms-pacientes:
     image: ${DOCKERHUB_USER}/pulsocare-ms-pacientes:latest
     environment:
-      <<: *oracle-env
+      <<: [*oracle-env, *hikari-env]
       SERVER_PORT: 8081
     volumes: *wallet-volume
     restart: unless-stopped
@@ -48,7 +58,7 @@ services:
   ms-config:
     image: ${DOCKERHUB_USER}/pulsocare-ms-config:latest
     environment:
-      <<: *oracle-env
+      <<: [*oracle-env, *hikari-env]
       SERVER_PORT: 8083
     volumes: *wallet-volume
     restart: unless-stopped
@@ -56,7 +66,7 @@ services:
   ms-consultas:
     image: ${DOCKERHUB_USER}/pulsocare-ms-consultas:latest
     environment:
-      <<: *oracle-env
+      <<: [*oracle-env, *hikari-env]
       SERVER_PORT: 8084
       # Cache ElastiCache (Redis) en modo cluster + TLS.
       CACHE_ENABLED: ${CACHE_ENABLED:-false}
@@ -70,7 +80,7 @@ services:
   ms-notification:
     image: ${DOCKERHUB_USER}/pulsocare-ms-notification:latest
     environment:
-      <<: *oracle-env
+      <<: [*oracle-env, *hikari-env]
       AWS_REGION: ${AWS_REGION:-us-east-1}
       SQS_QUEUE_URL: ${SQS_QUEUE_URL}
       SNS_TOPIC_ARN: ${SNS_TOPIC_ARN}
