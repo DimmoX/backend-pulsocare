@@ -49,7 +49,10 @@ public class PacienteService {
                 req.idComuna(), req.idModalidad(), req.idEstadoPaciente());
 
         long id = repo.insertar(nuevo);
-        log.info("Paciente {} creado con subject_id {}", id, subjectId);
+        // Todo paciente nuevo nace con sus umbrales clinicos por defecto, para que
+        // ms-config los devuelva y el monitoreo tenga rangos por paciente desde el alta.
+        repo.crearUmbralesPorDefecto(id);
+        log.info("Paciente {} creado con subject_id {} y umbrales por defecto", id, subjectId);
         return repo.buscar(id).orElseThrow();
     }
 
