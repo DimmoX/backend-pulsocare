@@ -21,7 +21,20 @@
     <java.version>17</java.version>
     <!-- Debe coincidir con el ojdbc11 que gestiona el BOM de Spring Boot 3.3.x -->
     <ojdbc.version>21.9.0.0</ojdbc.version>
+    <aws.sdk.version>2.28.16</aws.sdk.version>
   </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>software.amazon.awssdk</groupId>
+        <artifactId>bom</artifactId>
+        <version>${aws.sdk.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
 
   <dependencies>
     <dependency>
@@ -41,6 +54,12 @@
     <dependency>
       <groupId>org.springframework.security</groupId>
       <artifactId>spring-security-crypto</artifactId>
+    </dependency>
+
+    <!-- SNS: suscribir el correo del usuario al crearlo (filtrado por id_usuario) -->
+    <dependency>
+      <groupId>software.amazon.awssdk</groupId>
+      <artifactId>sns</artifactId>
     </dependency>
 
     <!-- Oracle JDBC + soporte de wallet (cwallet.sso) -->

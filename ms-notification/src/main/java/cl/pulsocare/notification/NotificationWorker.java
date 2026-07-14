@@ -9,6 +9,7 @@ import org.springframework.boot.CommandLineRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.services.sns.SnsClient;
+import software.amazon.awssdk.services.sns.model.MessageAttributeValue;
 import software.amazon.awssdk.services.sns.model.PublishResponse;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.DeleteMessageRequest;
@@ -105,11 +106,19 @@ public class NotificationWorker implements CommandLineRunner {
                         "Alerta #%d%n",
                         nombreDest, rol, paciente, signo, valor, unidad, nivelTxt, idAlerta);
 
-                // 3) Publicar en SNS (email)
+                // 3) Publicar en SNS (email). El atributo id_usuario hace que la
+                //    filter policy de cada suscripcion entregue SOLO a su dueno,
+                //    es decir cada cuidador recibe unicamente lo de sus pacientes.
+                Map<String, MessageAttributeValue> atributos = Map.of(
+                        "id_usuario", MessageAttributeValue.builder()
+                                .dataType("String")
+                                .stringValue(String.valueOf(idUsuario))
+                                .build());
                 PublishResponse resp = sns.publish(b -> b
                         .topicArn(topicArn)
                         .subject(asunto)
-                        .message(cuerpo));
+                        .message(cuerpo)
+                        .messageAttributes(atributos));
 
                 // 4) Registrar en PC_NOTIFICACION (estado 2 = 'Enviado')
                 jdbc.update(
