@@ -24,6 +24,7 @@ Dependencias (van en un Lambda Layer): oracledb
 import base64
 import json
 import os
+import time
 
 import boto3      # incluido en el runtime de Lambda
 import oracledb   # se provee via Lambda Layer
@@ -63,15 +64,31 @@ ESTADO_ALERTA_NUEVA = 1  # PC_ESTADO_ALERTA: 1='Generada'
 # ---------------------------------------------------------------------------
 # 2) Conexion a Oracle Autonomous (con wallet)
 # ---------------------------------------------------------------------------
-def obtener_conexion():
-    return oracledb.connect(
-        user=os.environ["DB_USER"],
-        password=os.environ["DB_PASSWORD"],
-        dsn=os.environ["DB_DSN"],
-        config_dir=os.environ.get("WALLET_DIR", "/var/task/wallet"),
-        wallet_location=os.environ.get("WALLET_DIR", "/var/task/wallet"),
-        wallet_password=os.environ.get("WALLET_PASSWORD"),
-    )
+def obtener_conexion(intentos=3, espera_seg=2):
+    """Conecta a Oracle Autonomous con reintentos.
+
+    La Autonomous cierra conexiones ociosas y a veces rechaza el primer intento
+    con DPY-4011 ("the database or network closed the connection"). Un connect de
+    un solo tiro tumbaria el batch entero (y con el, la alerta y su notificacion);
+    reintentar con backoff da la misma resiliencia que el pool Hikari de los
+    microservicios."""
+    ultimo_error = None
+    for intento in range(1, intentos + 1):
+        try:
+            return oracledb.connect(
+                user=os.environ["DB_USER"],
+                password=os.environ["DB_PASSWORD"],
+                dsn=os.environ["DB_DSN"],
+                config_dir=os.environ.get("WALLET_DIR", "/var/task/wallet"),
+                wallet_location=os.environ.get("WALLET_DIR", "/var/task/wallet"),
+                wallet_password=os.environ.get("WALLET_PASSWORD"),
+            )
+        except oracledb.DatabaseError as e:
+            ultimo_error = e
+            print("Conexion a Oracle fallo (intento %d/%d): %s" % (intento, intentos, e))
+            if intento < intentos:
+                time.sleep(espera_seg)
+    raise ultimo_error
 
 
 # ---------------------------------------------------------------------------
