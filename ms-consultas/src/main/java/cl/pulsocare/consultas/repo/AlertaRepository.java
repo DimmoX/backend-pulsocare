@@ -49,8 +49,12 @@ public class AlertaRepository {
             "JOIN PC_NIVEL_ALERTA nv ON nv.ID_NIVEL_ALERTA = a.ID_NIVEL_ALERTA " +
             "JOIN PC_ESTADO_ALERTA es ON es.ID_ESTADO_ALERTA = a.ID_ESTADO_ALERTA ";
 
-    /** Lista alertas; idPaciente y estadoCodigo (GENERADA/NOTIFICADA/...) son filtros opcionales. */
-    public List<Alerta> listar(Long idPaciente, String estadoCodigo) {
+    /**
+     * Lista alertas; idPaciente y estadoCodigo (GENERADA/NOTIFICADA/...) son filtros
+     * opcionales. limite acota la cantidad de filas (mas recientes primero): sin el,
+     * un paciente con meses de monitoreo devuelve decenas de miles de alertas.
+     */
+    public List<Alerta> listar(Long idPaciente, String estadoCodigo, int limite) {
         StringBuilder sql = new StringBuilder(SELECT).append("WHERE 1 = 1 ");
         List<Object> args = new ArrayList<>();
         if (idPaciente != null) {
@@ -61,7 +65,8 @@ public class AlertaRepository {
             sql.append("AND es.CODIGO = ? ");
             args.add(estadoCodigo);
         }
-        sql.append("ORDER BY a.FECHA_GENERACION DESC");
+        sql.append("ORDER BY a.FECHA_GENERACION DESC FETCH FIRST ? ROWS ONLY");
+        args.add(limite);
         return jdbc.query(sql.toString(), MAPPER, args.toArray());
     }
 

@@ -18,11 +18,15 @@ public class AlertaController {
         this.service = service;
     }
 
-    /** Lista alertas; con ?idPaciente= y/o ?estado= (GENERADA/NOTIFICADA/RECONOCIDA/RESUELTA) filtra. */
+    /**
+     * Lista alertas; con ?idPaciente= y/o ?estado= (GENERADA/NOTIFICADA/RECONOCIDA/RESUELTA)
+     * filtra, y ?limite= acota la cantidad (mas recientes primero).
+     */
     @GetMapping
     public List<Alerta> listar(@RequestParam(required = false) Long idPaciente,
-                               @RequestParam(required = false) String estado) {
-        return service.listar(idPaciente, estado);
+                               @RequestParam(required = false) String estado,
+                               @RequestParam(required = false) Integer limite) {
+        return service.listar(idPaciente, estado, limite);
     }
 
     @GetMapping("/{id}")
