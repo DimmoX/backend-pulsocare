@@ -20,6 +20,10 @@ import java.util.List;
 public class AuthService {
 
     private static final Logger log = LoggerFactory.getLogger(AuthService.class);
+
+    // Los unicos valores que acepta PC_USUARIO.CK_USUARIO_ESTADO.
+    public static final String ESTADO_ACTIVO = "ACTIVO";
+    public static final String ESTADO_INACTIVO = "INACTIVO";
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
 
     private final UsuarioRepository repo;
@@ -49,6 +53,15 @@ public class AuthService {
         String hash = encoder.encode(req.pass());
 
         if (repo.existeCorreo(req.correo())) {
+            // Un usuario dado de baja no puede volver a entrar. Este es el punto donde
+            // hay que frenarlo: la cuenta sigue viva en B2C (la baja es solo en Oracle),
+            // asi que autentica bien y llega hasta aqui a sincronizarse. Sin este corte,
+            // la desactivacion seria decorativa.
+            Usuario existente = repo.buscarPorCorreo(req.correo()).orElseThrow();
+            if (!ESTADO_ACTIVO.equals(existente.estado())) {
+                log.warn("Login rechazado: el usuario {} esta {}", req.correo(), existente.estado());
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "La cuenta esta desactivada");
+            }
             repo.actualizarSincronizacion(req.correo(), nombre[0], nombre[1], req.telefono(), hash);
             log.info("Usuario sincronizado: {}", req.correo());
             return repo.buscarPorCorreo(req.correo()).orElseThrow();
@@ -79,6 +92,29 @@ public class AuthService {
         }
 
         return passwordTemporal == null ? usuario : usuario.conPassword(passwordTemporal);
+    }
+
+    /**
+     * Da de baja o rehabilita a un usuario (lo que el admin ve como "eliminar").
+     *
+     * Es una baja logica y no un DELETE por dos motivos: siete claves foraneas apuntan
+     * a PC_USUARIO sin CASCADE, y sobre todo porque en salud no se borra quien reconocio
+     * una alerta. Al quedar INACTIVO deja de entrar (ver registrar()) y ms-notification
+     * deja de notificarle, porque ya filtra por u.ESTADO = 'ACTIVO'.
+     *
+     * No se toca su suscripcion en SNS a proposito: la baja es reversible, y quitarla
+     * obligaria al usuario a volver a confirmar el correo si se le rehabilita.
+     */
+    public Usuario cambiarEstado(long idUsuario, String estado) {
+        if (!ESTADO_ACTIVO.equals(estado) && !ESTADO_INACTIVO.equals(estado)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Estado no valido: " + estado + " (use ACTIVO o INACTIVO)");
+        }
+        if (repo.actualizarEstado(idUsuario, estado) == 0) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Usuario " + idUsuario + " no encontrado");
+        }
+        log.info("Usuario {} pasa a estado {}", idUsuario, estado);
+        return repo.buscarPorId(idUsuario).orElseThrow();
     }
 
     /** Roles que pueden ser equipo de cuidado (reciben alertas): Medico, Enfermero, Familiar. */

@@ -1,5 +1,6 @@
 package cl.pulsocare.auth.web;
 
+import cl.pulsocare.auth.dto.EstadoUsuarioRequest;
 import cl.pulsocare.auth.dto.LoginRequest;
 import cl.pulsocare.auth.dto.RegistroRequest;
 import cl.pulsocare.auth.model.Usuario;
@@ -39,5 +40,17 @@ public class AuthController {
     @GetMapping("/usuarios/{id}")
     public Usuario usuario(@PathVariable long id) {
         return service.obtener(id);
+    }
+
+    /**
+     * Da de baja o rehabilita a un usuario (ACTIVO / INACTIVO).
+     *
+     * Es un PUT sobre el estado y no un DELETE porque eso es lo que ocurre de verdad:
+     * el usuario no se borra (siete FKs lo impiden, y en salud no se borra quien
+     * reconocio una alerta), se desactiva. Y asi la operacion es reversible.
+     */
+    @PutMapping("/usuarios/{id}/estado")
+    public Usuario cambiarEstado(@PathVariable long id, @Valid @RequestBody EstadoUsuarioRequest req) {
+        return service.cambiarEstado(id, req.estado());
     }
 }

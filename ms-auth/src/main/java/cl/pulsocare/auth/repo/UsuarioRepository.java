@@ -96,6 +96,16 @@ public class UsuarioRepository {
                 nombre, apellidoPaterno, telefono, hash, correo);
     }
 
+    /**
+     * Da de baja o rehabilita a un usuario. Es una baja logica, no un DELETE: siete
+     * claves foraneas apuntan a PC_USUARIO sin ON DELETE CASCADE (asignaciones,
+     * alertas reconocidas, bitacora...), asi que borrarlo fallaria con ORA-02292 y,
+     * si pudiera, destruiria la trazabilidad clinica de quien atendio que alerta.
+     */
+    public int actualizarEstado(long idUsuario, String estado) {
+        return jdbc.update("UPDATE PC_USUARIO SET ESTADO = ? WHERE ID_USUARIO = ?", estado, idUsuario);
+    }
+
     private static Long nullableLong(java.sql.ResultSet rs, String col) throws java.sql.SQLException {
         java.math.BigDecimal v = rs.getBigDecimal(col);
         return v == null ? null : v.longValue();
