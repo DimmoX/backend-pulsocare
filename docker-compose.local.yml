@@ -20,6 +20,9 @@ x-oracle-env: &oracle-env
   DB_PASSWORD: ${DB_PASSWORD}
   DB_DSN: ${DB_DSN:-bdpulsocaretads_low}
   WALLET_DIR: /wallet
+  # La ADB se comparte con produccion: en local se usa un pool pequeno para no
+  # competir por las sesiones con los servicios que ya corren en EC2.
+  DB_POOL_MAX: ${DB_POOL_MAX:-2}
 
 # El wallet se monta como volumen read-only (nunca dentro de la imagen).
 x-wallet-volume: &wallet-volume
@@ -31,6 +34,16 @@ services:
     environment:
       <<: *oracle-env
       SERVER_PORT: 8082
+      # Alta de usuarios en Azure AD B2C via Microsoft Graph.
+      B2C_ENABLED: ${B2C_ENABLED:-false}
+      GRAPH_TENANT_ID: ${GRAPH_TENANT_ID}
+      GRAPH_CLIENT_ID: ${GRAPH_CLIENT_ID}
+      GRAPH_CLIENT_SECRET: ${GRAPH_CLIENT_SECRET}
+      GRAPH_ISSUER_DOMAIN: ${GRAPH_ISSUER_DOMAIN}
+      # Suscripcion a SNS: apagada en local para no dar de alta correos reales.
+      SNS_SUBSCRIBE_ENABLED: ${SNS_SUBSCRIBE_ENABLED:-false}
+      SNS_TOPIC_ARN: ${SNS_TOPIC_ARN}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
     volumes: *wallet-volume
     restart: unless-stopped
 
