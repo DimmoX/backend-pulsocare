@@ -41,8 +41,12 @@ class AuthServiceTest {
     private static final String CORREO = "ana@pulsocare.cl";
 
     private Usuario usuario(long id, long idRol) {
+        return usuario(id, idRol, "ACTIVO");
+    }
+
+    private Usuario usuario(long id, long idRol, String estado) {
         return new Usuario(id, idRol, "Medico", "Ana", "Diaz", null,
-                CORREO, null, "oid-existente", null, "ACTIVO", null);
+                CORREO, null, "oid-existente", null, estado, null);
     }
 
     private RegistroRequest req(String entraOid, Long idRol) {
@@ -137,5 +141,70 @@ class AuthServiceTest {
         when(repo.buscarPorCorreo(CORREO)).thenReturn(Optional.of(usuario(7, 1)));
 
         assertThat(service.login(new LoginRequest(CORREO, "correcta")).idUsuario()).isEqualTo(7);
+    }
+
+    // ---- baja logica de usuarios (lo que el admin ve como "eliminar") ----------
+
+    @Test
+    @DisplayName("Un usuario INACTIVO no puede volver a entrar aunque su cuenta viva en B2C")
+    void loginSync_usuarioInactivo_403() {
+        when(repo.existeCorreo(CORREO)).thenReturn(true);
+        when(repo.buscarPorCorreo(CORREO)).thenReturn(Optional.of(usuario(1, 1, "INACTIVO")));
+
+        assertThatThrownBy(() -> service.registrar(req("oid-existente", null)))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("403");
+
+        // No debe quedar rastro de la sesion: ni sincroniza ni lo reactiva.
+        verify(repo, never()).actualizarSincronizacion(anyString(), anyString(), any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("Un usuario ACTIVO sigue sincronizando con normalidad")
+    void loginSync_usuarioActivo_ok() {
+        when(repo.existeCorreo(CORREO)).thenReturn(true);
+        when(repo.buscarPorCorreo(CORREO)).thenReturn(Optional.of(usuario(1, 1, "ACTIVO")));
+
+        assertThat(service.registrar(req("oid-existente", null)).estado()).isEqualTo("ACTIVO");
+        verify(repo).actualizarSincronizacion(eq(CORREO), anyString(), any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("Dar de baja: actualiza el estado, NO borra la fila")
+    void cambiarEstado_inactivo() {
+        when(repo.actualizarEstado(7L, "INACTIVO")).thenReturn(1);
+        when(repo.buscarPorId(7L)).thenReturn(Optional.of(usuario(7, 1, "INACTIVO")));
+
+        assertThat(service.cambiarEstado(7L, "INACTIVO").estado()).isEqualTo("INACTIVO");
+        verify(repo).actualizarEstado(7L, "INACTIVO");
+    }
+
+    @Test
+    @DisplayName("La baja es reversible: se puede rehabilitar")
+    void cambiarEstado_reactivar() {
+        when(repo.actualizarEstado(7L, "ACTIVO")).thenReturn(1);
+        when(repo.buscarPorId(7L)).thenReturn(Optional.of(usuario(7, 1, "ACTIVO")));
+
+        assertThat(service.cambiarEstado(7L, "ACTIVO").estado()).isEqualTo("ACTIVO");
+    }
+
+    @Test
+    @DisplayName("Un estado fuera del CHECK de la tabla responde 400 y no toca la BD")
+    void cambiarEstado_invalido_400() {
+        assertThatThrownBy(() -> service.cambiarEstado(7L, "BORRADO"))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("400");
+
+        verify(repo, never()).actualizarEstado(anyLong(), anyString());
+    }
+
+    @Test
+    @DisplayName("Cambiar el estado de un usuario inexistente responde 404")
+    void cambiarEstado_inexistente_404() {
+        when(repo.actualizarEstado(999L, "INACTIVO")).thenReturn(0);
+
+        assertThatThrownBy(() -> service.cambiarEstado(999L, "INACTIVO"))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("404");
     }
 }
