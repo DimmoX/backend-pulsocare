@@ -29,6 +29,11 @@ spring:
           predicates:
             - Path=/api/alertas/**
 
+        - id: bitacora
+          uri: ${MS_CONSULTAS_URI:http://localhost:8084}
+          predicates:
+            - Path=/api/bitacora/**
+
         - id: lecturas
           uri: ${MS_CONSULTAS_URI:http://localhost:8084}
           predicates:
