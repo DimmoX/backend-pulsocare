@@ -42,13 +42,24 @@ public class LecturaRepository {
             "JOIN PC_SIGNO_VITAL s ON s.ID_SIGNO_VITAL = l.ID_SIGNO_VITAL ";
 
     /**
-     * Historico de un paciente. idSignoVital, desde y hasta son filtros
-     * opcionales; limite acota la cantidad de filas (mas recientes primero).
+     * Columnas por las que se puede ordenar. Es una lista blanca a proposito: el
+     * nombre de columna no puede ir como parametro de JDBC, asi que se concatena al
+     * SQL; aceptar texto libre del cliente seria inyeccion.
      */
-    public List<Lectura> historico(long idPaciente, Long idSignoVital,
-                                   LocalDateTime desde, LocalDateTime hasta, int limite) {
-        StringBuilder sql = new StringBuilder(SELECT).append("WHERE l.ID_PACIENTE = ? ");
-        List<Object> args = new ArrayList<>();
+    private static final java.util.Map<String, String> COLUMNAS_ORDEN = java.util.Map.of(
+            "fecha", "l.FECHA_MEDICION",
+            "valor", "l.VALOR_NUM",
+            "signo", "s.CODIGO",
+            "origen", "l.ORIGEN");
+
+    public static boolean ordenValido(String orden) {
+        return orden == null || COLUMNAS_ORDEN.containsKey(orden);
+    }
+
+    /** Arma el WHERE comun a historico() y contar(), para que no puedan divergir. */
+    private static void filtros(StringBuilder sql, List<Object> args, long idPaciente,
+                                Long idSignoVital, LocalDateTime desde, LocalDateTime hasta) {
+        sql.append("WHERE l.ID_PACIENTE = ? ");
         args.add(idPaciente);
         if (idSignoVital != null) {
             sql.append("AND l.ID_SIGNO_VITAL = ? ");
@@ -62,9 +73,48 @@ public class LecturaRepository {
             sql.append("AND l.FECHA_MEDICION <= ? ");
             args.add(java.sql.Timestamp.valueOf(hasta));
         }
-        sql.append("ORDER BY l.FECHA_MEDICION DESC FETCH FIRST ? ROWS ONLY");
+    }
+
+    /**
+     * Una pagina del historico. idSignoVital, desde y hasta son filtros opcionales;
+     * orden/ascendente definen el criterio y offset/limite la ventana.
+     *
+     * La paginacion la hace Oracle (OFFSET ... FETCH NEXT) y no el cliente: un dia de
+     * monitoreo son ~84.000 lecturas por paciente, asi que traerlas todas para que el
+     * navegador recorte 50 dejaria la conexion retenida durante minutos.
+     */
+    public List<Lectura> historico(long idPaciente, Long idSignoVital, LocalDateTime desde,
+                                   LocalDateTime hasta, int limite, int offset,
+                                   String orden, boolean ascendente) {
+        StringBuilder sql = new StringBuilder(SELECT);
+        List<Object> args = new ArrayList<>();
+        filtros(sql, args, idPaciente, idSignoVital, desde, hasta);
+
+        // Map.of() es inmutable y rechaza claves null: getOrDefault(null, ...) lanza
+        // NPE en vez de devolver el defecto, asi que el null se resuelve antes.
+        String columna = orden == null
+                ? "l.FECHA_MEDICION"
+                : COLUMNAS_ORDEN.getOrDefault(orden, "l.FECHA_MEDICION");
+        sql.append("ORDER BY ").append(columna).append(ascendente ? " ASC" : " DESC");
+        // Desempate estable: sin el, dos filas con el mismo valor pueden cambiar de
+        // pagina entre consultas y verse repetidas o perdidas al navegar.
+        if (!columna.equals("l.FECHA_MEDICION")) {
+            sql.append(", l.FECHA_MEDICION DESC");
+        }
+        sql.append(", l.ID_LECTURA DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY");
+        args.add(offset);
         args.add(limite);
         return jdbc.query(sql.toString(), MAPPER, args.toArray());
+    }
+
+    /** Total de filas que cumplen los filtros, para saber cuantas paginas hay. */
+    public long contar(long idPaciente, Long idSignoVital, LocalDateTime desde, LocalDateTime hasta) {
+        StringBuilder sql = new StringBuilder(
+                "SELECT COUNT(*) FROM PC_LECTURA_SIGNO_VITAL l ");
+        List<Object> args = new ArrayList<>();
+        filtros(sql, args, idPaciente, idSignoVital, desde, hasta);
+        Long n = jdbc.queryForObject(sql.toString(), Long.class, args.toArray());
+        return n == null ? 0 : n;
     }
 
     /** Ultima lectura registrada de cada signo vital del paciente (para los tiles en vivo). */

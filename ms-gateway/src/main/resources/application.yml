@@ -52,6 +52,9 @@ spring:
               - ${FRONTEND_ORIGIN:http://localhost:4200}
             allowedMethods: [GET, POST, PUT, DELETE, OPTIONS]
             allowedHeaders: [authorization, content-type]
+            # Sin esto el navegador oculta X-Total-Count a JavaScript (solo expone las
+            # cabeceras simples), y el frontend no sabria cuantas paginas hay.
+            exposedHeaders: [X-Total-Count]
             allowCredentials: true
 
 server:
