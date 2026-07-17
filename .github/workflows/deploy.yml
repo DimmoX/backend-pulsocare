@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       servicios: ${{ steps.salida.outputs.servicios }}
+      infra: ${{ steps.salida.outputs.infra }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,14 +32,20 @@ jobs:
             ms-consultas: 'ms-consultas/**'
             ms-notification: 'ms-notification/**'
             ms-gateway: 'ms-gateway/**'
+            infra: 'docker-compose.hub.yml'
 
       - name: Armar la lista de servicios a construir
         id: salida
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo 'servicios=["ms-auth","ms-pacientes","ms-config","ms-consultas","ms-notification","ms-gateway"]' >> "$GITHUB_OUTPUT"
+            echo 'infra=true' >> "$GITHUB_OUTPUT"
           else
-            echo 'servicios=${{ steps.cambios.outputs.changes }}' >> "$GITHUB_OUTPUT"
+            # "infra" es configuracion, no un microservicio: se saca de la matriz de
+            # build (no existe ./infra que construir) y viaja por su propia salida.
+            SERVICIOS=$(echo '${{ steps.cambios.outputs.changes }}' | jq -c 'map(select(. != "infra"))')
+            echo "servicios=$SERVICIOS" >> "$GITHUB_OUTPUT"
+            echo 'infra=${{ steps.cambios.outputs.infra }}' >> "$GITHUB_OUTPUT"
           fi
 
   # ----------------------------------------------------------------------
@@ -74,16 +81,27 @@ jobs:
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/pulsocare-${{ matrix.service }}:latest
 
   # ----------------------------------------------------------------------
-  # 3) Despliega en la EC2 por SSM. `docker compose up -d` recrea SOLO los
-  #    contenedores cuya imagen cambio (los que no se re-empujaron quedan
-  #    corriendo intactos) -> despliegue independiente por servicio.
+  # 3) Despliega en la EC2 por SSM. Sube el docker-compose y luego `up -d`,
+  #    que recrea SOLO los contenedores cuya imagen o definicion cambio (los
+  #    demas quedan corriendo intactos) -> despliegue independiente por servicio.
+  #
+  #    Corre tambien cuando el unico cambio fue el compose (sin imagenes que
+  #    construir), por eso build-push puede venir "skipped" y no debe frenarlo.
   # ----------------------------------------------------------------------
   deploy:
     needs: [detectar, build-push]
-    if: needs.detectar.outputs.servicios != '[]'
+    if: >-
+      always()
+      && needs.detectar.result == 'success'
+      && needs.build-push.result != 'failure'
+      && needs.build-push.result != 'cancelled'
+      && (needs.detectar.outputs.servicios != '[]' || needs.detectar.outputs.infra == 'true')
     runs-on: ubuntu-latest
     environment: env_ms_pulsocare
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Configurar credenciales de AWS (temporales del lab)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -92,13 +110,34 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Desplegar por SSM (pull + up)
+      - name: Desplegar por SSM (compose + pull + up)
         run: |
+          # El compose no contiene secretos: solo referencias ${VAR} que resuelve
+          # el .env que vive en la instancia. Por eso puede viajar en el propio
+          # comando SSM (el .env NO: quedaria en el historial de comandos).
+          # Se manda en base64 para no pelear con comillas y saltos de linea.
+          B64=$(base64 -w0 docker-compose.hub.yml)
+
+          # jq arma el JSON: evita que el contenido rompa el escapado del shell.
+          jq -n --arg b64 "$B64" '{
+            commands: [
+              "set -e",
+              "cd /home/admin/backend",
+              "cp -f docker-compose.hub.yml docker-compose.hub.yml.bak 2>/dev/null || true",
+              ("echo " + $b64 + " | base64 -d > docker-compose.hub.yml.nuevo"),
+              "docker compose -f docker-compose.hub.yml.nuevo config -q",
+              "mv -f docker-compose.hub.yml.nuevo docker-compose.hub.yml",
+              "docker compose -f docker-compose.hub.yml pull",
+              "docker compose -f docker-compose.hub.yml up -d",
+              "docker image prune -f"
+            ]
+          }' > /tmp/ssm-params.json
+
           CMD_ID=$(aws ssm send-command \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --document-name "AWS-RunShellScript" \
             --comment "CD backend PulsoCare" \
-            --parameters commands='["set -e","cd /home/admin/backend","docker compose -f docker-compose.hub.yml pull","docker compose -f docker-compose.hub.yml up -d","docker image prune -f"]' \
+            --parameters file:///tmp/ssm-params.json \
             --query "Command.CommandId" --output text)
           echo "CommandId: $CMD_ID"
 
