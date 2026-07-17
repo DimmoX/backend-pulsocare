@@ -17,7 +17,7 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
@@ -102,6 +102,80 @@ class PacienteServiceTest {
     void eliminar_inexistente_404() {
         when(repo.eliminar(999L)).thenReturn(0);
         assertThatThrownBy(() -> service.eliminar(999L))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("404");
+    }
+
+    // ---- alta / reactivacion de pacientes ---------------------------------
+
+    @Test
+    @DisplayName("soloMonitoreados=true excluye a los dados de alta")
+    void listar_soloMonitoreados_excluyeAlta() {
+        when(repo.idEstadoPorCodigo("ALTA")).thenReturn(4L);
+        when(repo.listarExcluyendoEstado(4L)).thenReturn(java.util.List.of(paciente(41, 10031757L)));
+
+        assertThat(service.listar(true)).hasSize(1);
+        verify(repo).listarExcluyendoEstado(4L);
+        verify(repo, never()).listar();
+    }
+
+    @Test
+    @DisplayName("Sin flag lista a todos, incluidos los de alta")
+    void listar_todos() {
+        when(repo.listar()).thenReturn(java.util.List.of(paciente(41, 10031757L)));
+        assertThat(service.listar(false)).hasSize(1);
+        verify(repo, never()).listarExcluyendoEstado(anyLong());
+    }
+
+    @Test
+    @DisplayName("Si el catalogo no tiene ALTA, no filtra (evita ocultar a todos)")
+    void listar_sinAltaEnCatalogo_noFiltra() {
+        when(repo.idEstadoPorCodigo("ALTA")).thenReturn(null);
+        when(repo.listar()).thenReturn(java.util.List.of(paciente(41, 10031757L)));
+
+        assertThat(service.listar(true)).hasSize(1);
+        verify(repo).listar();
+        verify(repo, never()).listarExcluyendoEstado(anyLong());
+    }
+
+    @Test
+    @DisplayName("Dar de alta: actualiza el estado, NO borra")
+    void cambiarEstado_alta() {
+        when(repo.buscar(41L)).thenReturn(Optional.of(paciente(41, 10031757L)));
+        when(repo.idEstadoPorCodigo("ALTA")).thenReturn(4L);
+
+        service.cambiarEstado(41L, "ALTA");
+        verify(repo).actualizarEstado(41L, 4L);
+        verify(repo, never()).eliminar(anyLong());
+    }
+
+    @Test
+    @DisplayName("Reactivar devuelve al paciente al estado ESTABLE")
+    void reactivar_dejaEstable() {
+        when(repo.buscar(41L)).thenReturn(Optional.of(paciente(41, 10031757L)));
+        when(repo.idEstadoPorCodigo("ESTABLE")).thenReturn(1L);
+
+        service.reactivar(41L);
+        verify(repo).actualizarEstado(41L, 1L);
+    }
+
+    @Test
+    @DisplayName("Un codigo de estado inexistente responde 400")
+    void cambiarEstado_invalido_400() {
+        when(repo.buscar(41L)).thenReturn(Optional.of(paciente(41, 10031757L)));
+        when(repo.idEstadoPorCodigo("XXX")).thenReturn(null);
+
+        assertThatThrownBy(() -> service.cambiarEstado(41L, "XXX"))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("400");
+        verify(repo, never()).actualizarEstado(anyLong(), anyLong());
+    }
+
+    @Test
+    @DisplayName("Cambiar el estado de un paciente inexistente responde 404")
+    void cambiarEstado_inexistente_404() {
+        when(repo.buscar(999L)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.cambiarEstado(999L, "ALTA"))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("404");
     }

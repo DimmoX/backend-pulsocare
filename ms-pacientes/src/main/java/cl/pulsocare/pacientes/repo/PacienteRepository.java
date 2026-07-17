@@ -53,6 +53,26 @@ public class PacienteRepository {
         return jdbc.query("SELECT " + COLS + " FROM PC_PACIENTE ORDER BY ID_PACIENTE", MAPPER);
     }
 
+    /** Todos menos los que estan en el estado indicado (para excluir a los dados de alta). */
+    public List<Paciente> listarExcluyendoEstado(long idEstado) {
+        return jdbc.query(
+                "SELECT " + COLS + " FROM PC_PACIENTE " +
+                "WHERE ID_ESTADO_PACIENTE IS NULL OR ID_ESTADO_PACIENTE <> ? ORDER BY ID_PACIENTE",
+                MAPPER, idEstado);
+    }
+
+    /** ID_ESTADO_PACIENTE del catalogo por su codigo (ESTABLE, ALTA, ...); null si no existe. */
+    public Long idEstadoPorCodigo(String codigo) {
+        return jdbc.query("SELECT ID_ESTADO_PACIENTE FROM PC_ESTADO_PACIENTE WHERE CODIGO = ?",
+                (rs, n) -> rs.getLong("ID_ESTADO_PACIENTE"), codigo).stream().findFirst().orElse(null);
+    }
+
+    /** Cambia solo el estado clinico del paciente (alta / reactivacion). */
+    public int actualizarEstado(long idPaciente, long idEstado) {
+        return jdbc.update("UPDATE PC_PACIENTE SET ID_ESTADO_PACIENTE = ? WHERE ID_PACIENTE = ?",
+                idEstado, idPaciente);
+    }
+
     public Optional<Paciente> buscar(long id) {
         return jdbc.query("SELECT " + COLS + " FROM PC_PACIENTE WHERE ID_PACIENTE = ?", MAPPER, id)
                 .stream().findFirst();
