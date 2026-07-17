@@ -25,8 +25,49 @@ public class PacienteService {
         this.pool = pool;
     }
 
+    // Codigos del catalogo PC_ESTADO_PACIENTE.
+    private static final String ESTADO_ALTA = "ALTA";
+    private static final String ESTADO_ACTIVO_POR_DEFECTO = "ESTABLE";
+
     public List<Paciente> listar() {
+        return listar(false);
+    }
+
+    /**
+     * Lista pacientes. Con soloMonitoreados=true excluye a los dados de alta: eso lo usa
+     * el replayer para dejar de generarles lecturas. El panel del admin llama sin el flag
+     * para poder ver y reactivar tambien a los de alta.
+     */
+    public List<Paciente> listar(boolean soloMonitoreados) {
+        if (soloMonitoreados) {
+            Long idAlta = repo.idEstadoPorCodigo(ESTADO_ALTA);
+            if (idAlta != null) {
+                return repo.listarExcluyendoEstado(idAlta);
+            }
+        }
         return repo.listar();
+    }
+
+    /**
+     * Da de alta a un paciente (deja de monitorearse) o lo reactiva. No se borra: un
+     * DELETE fallaria por las seis FKs sin CASCADE, y en salud no se elimina la historia
+     * clinica; solo se cierra el episodio de monitoreo.
+     */
+    public Paciente cambiarEstado(long idPaciente, String codigo) {
+        obtener(idPaciente); // 404 si no existe
+        Long idEstado = repo.idEstadoPorCodigo(codigo);
+        if (idEstado == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Estado no valido: " + codigo);
+        }
+        repo.actualizarEstado(idPaciente, idEstado);
+        log.info("Paciente {} pasa al estado {}", idPaciente, codigo);
+        return repo.buscar(idPaciente).orElseThrow();
+    }
+
+    /** Reactiva a un paciente dado de alta, devolviendolo al monitoreo. */
+    public Paciente reactivar(long idPaciente) {
+        return cambiarEstado(idPaciente, ESTADO_ACTIVO_POR_DEFECTO);
     }
 
     public Paciente obtener(long id) {

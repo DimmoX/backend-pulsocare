@@ -2,6 +2,7 @@ package cl.pulsocare.pacientes.web;
 
 import cl.pulsocare.pacientes.dto.ActualizarPacienteRequest;
 import cl.pulsocare.pacientes.dto.CrearPacienteRequest;
+import cl.pulsocare.pacientes.dto.EstadoPacienteRequest;
 import cl.pulsocare.pacientes.model.Paciente;
 import cl.pulsocare.pacientes.service.PacienteService;
 import jakarta.validation.Valid;
@@ -23,9 +24,14 @@ public class PacienteController {
         this.service = service;
     }
 
+    /**
+     * Lista pacientes. soloMonitoreados=true excluye a los dados de alta (lo usa el
+     * replayer); sin el flag, el panel del admin los ve todos para poder reactivarlos.
+     */
     @GetMapping
-    public List<Paciente> listar() {
-        return service.listar();
+    public List<Paciente> listar(
+            @RequestParam(name = "soloMonitoreados", defaultValue = "false") boolean soloMonitoreados) {
+        return service.listar(soloMonitoreados);
     }
 
     @GetMapping("/{id}")
@@ -44,6 +50,15 @@ public class PacienteController {
     @PutMapping("/{id}")
     public Paciente actualizar(@PathVariable long id, @Valid @RequestBody ActualizarPacienteRequest req) {
         return service.actualizar(id, req);
+    }
+
+    /**
+     * Da de alta a un paciente o lo reactiva, segun el codigo (ALTA / ESTABLE). Es una
+     * baja logica: no se borra su historia clinica, solo se cierra el monitoreo.
+     */
+    @PutMapping("/{id}/estado")
+    public Paciente cambiarEstado(@PathVariable long id, @Valid @RequestBody EstadoPacienteRequest req) {
+        return service.cambiarEstado(id, req.codigo());
     }
 
     @DeleteMapping("/{id}")
