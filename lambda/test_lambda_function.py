@@ -59,56 +59,67 @@ def test_signo_desconocido_se_trata_como_normal():
 
 
 # ---------------------------------------------------------------------------
-# Ruido de alertas: una condicion sostenida generaba una alerta y un correo por
-# CADA lectura. Estas pruebas fijan las dos reglas que lo cortan: solo se anuncia
-# cuando el estado empeora, y solo el nivel critico llega a SQS.
+# Ruido de alertas
+#
+# Una condicion sostenida generaba una alerta y un correo por CADA lectura. Estas
+# pruebas fijan las tres reglas que lo cortan: la condicion debe sostenerse para
+# confirmarse, se anuncia una sola vez por episodio, y solo lo critico llega a SQS.
 # ---------------------------------------------------------------------------
 import base64  # noqa: E402
 import json  # noqa: E402
+from datetime import datetime, timedelta  # noqa: E402
+
+INICIO = datetime(2026, 7, 18, 10, 0, 0)
 
 
 class CursorFalso:
-    """Cursor minimo: responde el estado previo y anota que se inserto."""
+    """
+    Cursor minimo con memoria de las lecturas del paciente.
 
-    def __init__(self, estado_previo=None):
-        self.estado_previo = estado_previo
+    Recibe el historial previo (estados, del mas antiguo al mas reciente), agrega la
+    lectura que inserta el handler y responde la consulta de confirmacion como lo
+    haria Oracle: las N mas recientes primero.
+    """
+
+    def __init__(self, historial=(), separacion_seg=7):
+        self.separacion = separacion_seg
+        self.lecturas = [
+            (estado, INICIO + timedelta(seconds=i * separacion_seg))
+            for i, estado in enumerate(historial)
+        ]
         self.inserciones = []
-        self._fila = None
+        self._filas = []
 
     def var(self, *_args, **_kwargs):
         variable = MagicMock()
         variable.getvalue.return_value = [1]
         return variable
 
-    def execute(self, sql, **_params):
+    def execute(self, sql, **params):
         sql = " ".join(sql.split())
-        if sql.startswith("SELECT ID_ESTADO_LECTURA"):
-            self._fila = (self.estado_previo,) if self.estado_previo else None
+        if "INSERT INTO PC_LECTURA_SIGNO_VITAL" in sql:
+            self.inserciones.append("LECTURA")
+            siguiente = (
+                self.lecturas[-1][1] + timedelta(seconds=self.separacion)
+                if self.lecturas
+                else INICIO
+            )
+            self.lecturas.append((params["id_estado"], siguiente))
+        elif sql.startswith("SELECT ID_ESTADO_LECTURA"):
+            self._filas = list(reversed(self.lecturas))[: params["cuantas"]]
         elif "INSERT INTO PC_ALERTA" in sql:
             self.inserciones.append("ALERTA")
-        elif "INSERT INTO PC_LECTURA_SIGNO_VITAL" in sql:
-            self.inserciones.append("LECTURA")
+
+    def fetchall(self):
+        return self._filas
 
     def fetchone(self):
-        return self._fila
+        return self._filas[0] if self._filas else None
 
 
-def _evento_kinesis(itemid, valor):
-    cuerpo = {
-        "id_paciente": 41,
-        "itemid": itemid,
-        "valor": valor,
-        "unidad": "bpm",
-        "fecha_medicion": "2026-07-18T10:00:00",
-        "signo": "FC",
-    }
-    datos = base64.b64encode(json.dumps(cuerpo).encode()).decode()
-    return {"Records": [{"kinesis": {"data": datos}}]}
-
-
-def _correr(monkeypatch, itemid, valor, estado_previo):
-    """Corre el handler con un cursor falso y devuelve (cursor, mensajes_sqs)."""
-    cursor = CursorFalso(estado_previo)
+def _correr(monkeypatch, itemid, valor, historial=(), separacion_seg=7):
+    """Corre el handler sobre un historial dado. Devuelve (cursor, sqs, resultado)."""
+    cursor = CursorFalso(historial, separacion_seg)
     conexion = MagicMock()
     conexion.cursor.return_value = cursor
     monkeypatch.setattr(lf, "obtener_conexion", lambda *a, **k: conexion)
@@ -117,57 +128,89 @@ def _correr(monkeypatch, itemid, valor, estado_previo):
     monkeypatch.setattr(lf, "_sqs", sqs)
     monkeypatch.setattr(lf, "SQS_QUEUE_URL", "https://cola-de-prueba")
 
-    resultado = lf.lambda_handler(_evento_kinesis(itemid, valor), None)
-    return cursor, sqs, resultado
+    cuerpo = {
+        "id_paciente": 41,
+        "itemid": itemid,
+        "valor": valor,
+        "unidad": "%",
+        "fecha_medicion": "2026-07-18T10:00:00",
+        "signo": "SPO2",
+    }
+    datos = base64.b64encode(json.dumps(cuerpo).encode()).decode()
+    evento = {"Records": [{"kinesis": {"data": datos}}]}
+    return cursor, sqs, lf.lambda_handler(evento, None)
 
 
-def test_condicion_sostenida_no_repite_la_alerta(monkeypatch):
-    # FC 110 (atencion) cuando la lectura anterior ya estaba en atencion:
-    # el episodio ya se anuncio, no debe volver a anunciarse.
-    cursor, sqs, resultado = _correr(monkeypatch, "220045", 110, lf.ESTADO_ATENCION)
+# --- confirmacion de lo critico -------------------------------------------------
+# SpO2 89 es critico (rango critico 90-100). El caso real: 95, luego 89, luego 99.
+
+def test_pico_critico_aislado_no_alerta(monkeypatch):
+    # Es el artefacto que se observo 80 veces en 24h: una sola lectura fuera de rango.
+    cursor, sqs, resultado = _correr(monkeypatch, "220277", 89, historial=(1, 1, 1))
     assert "ALERTA" not in cursor.inserciones
     assert resultado["alertas"] == 0
     sqs.send_message.assert_not_called()
 
 
-def test_empeorar_de_atencion_a_critico_si_alerta(monkeypatch):
-    # FC 140 (critico) viniendo de atencion: el paciente empeoro, hay que avisar.
-    cursor, sqs, resultado = _correr(monkeypatch, "220045", 140, lf.ESTADO_ATENCION)
+def test_critico_sostenido_alerta_y_notifica(monkeypatch):
+    # Tercera lectura critica seguida: la condicion se confirma y recien ahi se avisa.
+    cursor, sqs, resultado = _correr(monkeypatch, "220277", 89, historial=(1, 1, 3, 3))
     assert "ALERTA" in cursor.inserciones
     assert resultado["alertas"] == 1
     sqs.send_message.assert_called_once()
 
 
-def test_primera_lectura_anomala_si_alerta(monkeypatch):
-    # Sin lecturas previas se asume normal, para no perder la primera anomalia.
-    cursor, _sqs, resultado = _correr(monkeypatch, "220045", 140, None)
-    assert "ALERTA" in cursor.inserciones
-    assert resultado["alertas"] == 1
-
-
-def test_mejorar_no_alerta(monkeypatch):
-    # FC 110 (atencion) viniendo de critico: el paciente mejoro, no es un evento nuevo.
-    cursor, _sqs, resultado = _correr(monkeypatch, "220045", 110, lf.ESTADO_CRITICO)
+def test_critico_ya_confirmado_no_repite(monkeypatch):
+    # Cuarta lectura critica: el episodio ya se anuncio, no se vuelve a anunciar.
+    cursor, sqs, resultado = _correr(monkeypatch, "220277", 89, historial=(1, 3, 3, 3))
     assert "ALERTA" not in cursor.inserciones
-    assert resultado["alertas"] == 0
+    sqs.send_message.assert_not_called()
 
 
-def test_atencion_se_registra_pero_no_notifica(monkeypatch):
-    # Nivel atencion desde normal: queda la alerta en la BD para la ficha, sin correo.
-    cursor, sqs, resultado = _correr(monkeypatch, "220045", 110, lf.ESTADO_NORMAL)
+def test_racha_separada_por_un_corte_no_confirma(monkeypatch):
+    # Tres criticas seguidas pero espaciadas 10 min: hubo un corte del monitoreo,
+    # no es una condicion sostenida.
+    cursor, sqs, _resultado = _correr(
+        monkeypatch, "220277", 89, historial=(1, 1, 3, 3), separacion_seg=600
+    )
+    assert "ALERTA" not in cursor.inserciones
+    sqs.send_message.assert_not_called()
+
+
+def test_la_lectura_critica_siempre_se_guarda(monkeypatch):
+    # Aunque no amerite alerta, el pico debe quedar en el historico y en la ficha.
+    cursor, _sqs, resultado = _correr(monkeypatch, "220277", 89, historial=(1, 1, 1))
+    assert "LECTURA" in cursor.inserciones
+    assert resultado["procesados"] == 1
+    assert cursor.lecturas[-1][0] == lf.ESTADO_CRITICO
+
+
+# --- atencion: se registra, no interrumpe ---------------------------------------
+
+def test_atencion_alerta_sin_confirmacion_pero_no_notifica(monkeypatch):
+    # SpO2 94 es atencion. No necesita sostenerse porque no genera correo.
+    cursor, sqs, resultado = _correr(monkeypatch, "220277", 94, historial=(1,))
     assert "ALERTA" in cursor.inserciones
     assert resultado["alertas"] == 1
     sqs.send_message.assert_not_called()
 
 
-def test_critico_desde_normal_notifica(monkeypatch):
-    cursor, sqs, _resultado = _correr(monkeypatch, "220045", 140, lf.ESTADO_NORMAL)
-    assert "ALERTA" in cursor.inserciones
-    sqs.send_message.assert_called_once()
+def test_atencion_sostenida_no_repite(monkeypatch):
+    cursor, _sqs, resultado = _correr(monkeypatch, "220277", 94, historial=(1, 2))
+    assert "ALERTA" not in cursor.inserciones
+    assert resultado["alertas"] == 0
 
 
-def test_valor_normal_no_consulta_alerta(monkeypatch):
-    cursor, sqs, resultado = _correr(monkeypatch, "220045", 80, lf.ESTADO_NORMAL)
+def test_empeorar_de_atencion_a_critico_se_confirma_igual(monkeypatch):
+    # Subir de atencion a critico no salta la confirmacion: el artefacto de 89 puede
+    # aparecer igual mientras el paciente ya estaba en atencion.
+    cursor, sqs, _resultado = _correr(monkeypatch, "220277", 89, historial=(2, 2, 2))
+    assert "ALERTA" not in cursor.inserciones
+    sqs.send_message.assert_not_called()
+
+
+def test_valor_normal_no_alerta(monkeypatch):
+    cursor, sqs, resultado = _correr(monkeypatch, "220277", 98, historial=(1,))
     assert "ALERTA" not in cursor.inserciones
     assert resultado["procesados"] == 1
     sqs.send_message.assert_not_called()
