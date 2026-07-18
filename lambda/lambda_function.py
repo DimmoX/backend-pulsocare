@@ -67,6 +67,21 @@ NIVEL_ATENCION = 1
 NIVEL_CRITICO = 2
 ESTADO_ALERTA_NUEVA = 1  # PC_ESTADO_ALERTA: 1='Generada'
 
+# Lecturas consecutivas que debe durar una condicion antes de generar alerta.
+# Medido sobre 24h reales del paciente 41 (35.230 lecturas): TODAS sus lecturas
+# criticas fueron SpO2=89 aisladas, con 95 antes y 99 seis segundos despues. Una
+# saturacion no cae 10 puntos y se recupera en segundos: son artefactos de medicion.
+# Atencion no exige confirmacion porque no interrumpe a nadie (no genera correo).
+LECTURAS_CONFIRMACION = {
+    ESTADO_ATENCION: 1,
+    ESTADO_CRITICO: int(os.environ.get("LECTURAS_CONFIRMACION_CRITICA", "3")),
+}
+
+# La racha debe caber en esta ventana. Sin esto, tras un corte del monitoreo (se han
+# visto huecos de 4 horas) tres lecturas separadas por horas contarian como una
+# condicion sostenida. Con la cadencia real de ~7s por signo, 3 lecturas son ~14s.
+VENTANA_CONFIRMACION_SEG = int(os.environ.get("VENTANA_CONFIRMACION_SEG", "120"))
+
 
 # ---------------------------------------------------------------------------
 # 2) Conexion a Oracle Autonomous (con wallet)
@@ -117,29 +132,53 @@ def clasificar(itemid, valor):
 # ---------------------------------------------------------------------------
 # 4) Persistencia
 # ---------------------------------------------------------------------------
-def estado_previo(cur, id_paciente, id_signo):
+def condicion_confirmada(cur, id_paciente, id_signo, estado):
     """
-    Estado de la lectura anterior del mismo paciente y signo.
+    True si el estado recien alcanzado es un evento nuevo que amerita alerta.
 
-    Es lo que permite distinguir un evento clinico nuevo de una condicion que ya
-    estaba en curso. Debe consultarse ANTES de insertar la lectura actual, o se
-    devolveria a si misma. Un paciente sin lecturas previas se asume normal, para
-    que su primera anomalia si se anuncie.
+    Exige dos cosas. Primero, que la condicion se SOSTENGA las lecturas que pide
+    LECTURAS_CONFIRMACION para ese estado: un valor aislado suele ser un artefacto de
+    medicion (sensor movido, mala lectura), no un cambio clinico. Segundo, que la
+    lectura anterior a esa racha fuera mejor, de modo que un episodio se anuncie una
+    sola vez al empezar y no en cada lectura mientras dura.
+
+    Debe llamarse DESPUES de insertar la lectura actual, que cuenta como la primera
+    de la racha.
     """
+    minimo = LECTURAS_CONFIRMACION.get(estado, 1)
     cur.execute(
         """
-        SELECT ID_ESTADO_LECTURA
+        SELECT ID_ESTADO_LECTURA, FECHA_MEDICION
           FROM PC_LECTURA_SIGNO_VITAL
          WHERE ID_PACIENTE = :id_paciente
            AND ID_SIGNO_VITAL = :id_signo
          ORDER BY FECHA_MEDICION DESC
-         FETCH FIRST 1 ROWS ONLY
+         FETCH FIRST :cuantas ROWS ONLY
         """,
         id_paciente=id_paciente,
         id_signo=id_signo,
+        cuantas=minimo + 1,
     )
-    fila = cur.fetchone()
-    return int(fila[0]) if fila else ESTADO_NORMAL
+    filas = cur.fetchall()
+    if len(filas) < minimo:
+        return False  # el paciente aun no tiene suficientes lecturas
+
+    racha = filas[:minimo]
+    if any(int(f[0]) != estado for f in racha):
+        return False  # la condicion no se sostuvo
+
+    # Tras un corte del monitoreo las lecturas quedan separadas por horas, y N de
+    # ellas ya no significan "sostenido". La racha tiene que caber en una ventana
+    # corta para que confirmar tenga sentido.
+    if minimo > 1:
+        lapso = (racha[0][1] - racha[-1][1]).total_seconds()
+        if lapso > VENTANA_CONFIRMACION_SEG:
+            return False
+
+    # Si no hay lectura previa a la racha, el paciente recien empieza: se asume que
+    # venia normal para no perder su primera anomalia.
+    anterior = int(filas[minimo][0]) if len(filas) > minimo else ESTADO_NORMAL
+    return anterior < estado
 
 
 def guardar_lectura(cur, evento, id_signo, id_estado):
@@ -249,15 +288,13 @@ def lambda_handler(event, context):
             valor = float(evento["valor"])
             id_estado, nivel = clasificar(itemid, valor)
 
-            # Se consulta antes de insertar: la lectura actual todavia no debe existir.
-            previo = estado_previo(cur, int(evento["id_paciente"]), id_signo)
+            # La lectura SIEMPRE se guarda con su estado real, aunque despues no
+            # amerite alerta: el pico sigue viendose en la ficha y en el historico.
             id_lectura = guardar_lectura(cur, evento, id_signo, id_estado)
 
-            # Un episodio se anuncia cuando empeora, no mientras persiste. Los estados
-            # estan ordenados (normal < atencion < critico), asi que comparar basta:
-            # una condicion sostenida no vuelve a alertar, pero un paciente que pasa de
-            # atencion a critico si, que es justo el caso que no se puede perder.
-            if nivel is not None and id_estado > previo:
+            if nivel is not None and condicion_confirmada(
+                cur, int(evento["id_paciente"]), id_signo, id_estado
+            ):
                 generar_alerta(cur, evento, id_lectura, id_signo, nivel)
                 alertas += 1
             procesados += 1
