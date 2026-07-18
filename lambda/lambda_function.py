@@ -9,7 +9,14 @@ Se dispara automaticamente cuando llegan registros al Data Stream de Kinesis
   1) decodifica el evento (Kinesis entrega los records en base64),
   2) evalua la lectura contra los umbrales del paciente (NORMAL/ATENCION/CRITICO),
   3) persiste en PC_LECTURA_SIGNO_VITAL,
-  4) si esta fuera de rango, genera PC_ALERTA (+ deja el punto para el SMS).
+  4) si el estado EMPEORO respecto de la lectura anterior, genera PC_ALERTA,
+  5) y solo si esa alerta es critica, la publica a SQS para que se notifique.
+
+Los pasos 4 y 5 existen para no saturar al equipo medico. Antes se alertaba en cada
+lectura fuera de rango, asi que un signo levemente alterado durante horas producia un
+correo por lectura y el destinatario terminaba ignorandolos todos. Ahora un episodio
+se anuncia cuando empieza o cuando empeora, y el nivel de atencion queda registrado
+y visible en la ficha sin interrumpir a nadie.
 
 Variables de entorno esperadas (configurar en la consola de Lambda):
     DB_USER          usuario de la BD (ej. ADMIN o el usuario de la app)
@@ -110,6 +117,31 @@ def clasificar(itemid, valor):
 # ---------------------------------------------------------------------------
 # 4) Persistencia
 # ---------------------------------------------------------------------------
+def estado_previo(cur, id_paciente, id_signo):
+    """
+    Estado de la lectura anterior del mismo paciente y signo.
+
+    Es lo que permite distinguir un evento clinico nuevo de una condicion que ya
+    estaba en curso. Debe consultarse ANTES de insertar la lectura actual, o se
+    devolveria a si misma. Un paciente sin lecturas previas se asume normal, para
+    que su primera anomalia si se anuncie.
+    """
+    cur.execute(
+        """
+        SELECT ID_ESTADO_LECTURA
+          FROM PC_LECTURA_SIGNO_VITAL
+         WHERE ID_PACIENTE = :id_paciente
+           AND ID_SIGNO_VITAL = :id_signo
+         ORDER BY FECHA_MEDICION DESC
+         FETCH FIRST 1 ROWS ONLY
+        """,
+        id_paciente=id_paciente,
+        id_signo=id_signo,
+    )
+    fila = cur.fetchone()
+    return int(fila[0]) if fila else ESTADO_NORMAL
+
+
 def guardar_lectura(cur, evento, id_signo, id_estado):
     """Inserta en PC_LECTURA_SIGNO_VITAL y devuelve el ID generado."""
     id_var = cur.var(oracledb.NUMBER)
@@ -166,6 +198,13 @@ def generar_alerta(cur, evento, id_lectura, id_signo, nivel):
     )
     id_alerta = int(id_var.getvalue()[0])
 
+    # Solo el nivel critico interrumpe al equipo medico. Atencion queda registrada y
+    # visible en la ficha, pero no genera correo: es el mismo criterio de prioridad de
+    # los monitores clinicos, donde la baja prioridad se muestra y no anuncia. Sin esto
+    # un signo levemente fuera de rango durante horas manda un correo por lectura.
+    if nivel != NIVEL_CRITICO:
+        return id_alerta
+
     # Publica AlarmRaised a SQS para que el notification-service envie el aviso.
     if _sqs is not None:
         mensaje = {
@@ -210,8 +249,15 @@ def lambda_handler(event, context):
             valor = float(evento["valor"])
             id_estado, nivel = clasificar(itemid, valor)
 
+            # Se consulta antes de insertar: la lectura actual todavia no debe existir.
+            previo = estado_previo(cur, int(evento["id_paciente"]), id_signo)
             id_lectura = guardar_lectura(cur, evento, id_signo, id_estado)
-            if nivel is not None:
+
+            # Un episodio se anuncia cuando empeora, no mientras persiste. Los estados
+            # estan ordenados (normal < atencion < critico), asi que comparar basta:
+            # una condicion sostenida no vuelve a alertar, pero un paciente que pasa de
+            # atencion a critico si, que es justo el caso que no se puede perder.
+            if nivel is not None and id_estado > previo:
                 generar_alerta(cur, evento, id_lectura, id_signo, nivel)
                 alertas += 1
             procesados += 1
