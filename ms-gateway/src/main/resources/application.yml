@@ -39,6 +39,13 @@ spring:
           predicates:
             - Path=/api/pacientes/*/lecturas/**
 
+        # Debe ir antes de la ruta generica de pacientes: el puntaje NEWS2 se calcula
+        # en ms-consultas (desde las ultimas lecturas), no en ms-pacientes.
+        - id: news2
+          uri: ${MS_CONSULTAS_URI:http://localhost:8084}
+          predicates:
+            - Path=/api/pacientes/*/news2
+
         - id: usuarios
           uri: ${MS_PACIENTES_URI:http://localhost:8081}
           predicates:
