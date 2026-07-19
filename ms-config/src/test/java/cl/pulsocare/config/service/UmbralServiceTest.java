@@ -7,6 +7,7 @@ import cl.pulsocare.config.repo.UmbralRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -31,6 +32,7 @@ import static org.mockito.Mockito.*;
 class UmbralServiceTest {
 
     @Mock UmbralRepository repo;
+    @Mock cl.pulsocare.config.repo.BitacoraRepository bitacora;
     @InjectMocks UmbralService service;
 
     private static BigDecimal bd(String v) { return new BigDecimal(v); }
@@ -123,8 +125,55 @@ class UmbralServiceTest {
 
     @Test @DisplayName("desactivar (baja logica) un umbral inexistente responde 404")
     void desactivar_inexistente_404() {
-        when(repo.desactivar(77L)).thenReturn(0);
-        assertThatThrownBy(() -> service.desactivar(77L))
+        when(repo.buscar(77L)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.desactivar(77L, 99L))
                 .isInstanceOf(ResponseStatusException.class).hasMessageContaining("404");
+        verify(bitacora, never()).registrar(any(), any(), any(), any());
+    }
+
+    // --- auditoria y coherencia de los limites ---------------------------------
+
+    @Test @DisplayName("crear un umbral queda registrado en la bitacora")
+    void crear_registra_en_bitacora() {
+        CrearUmbralRequest req = new CrearUmbralRequest(41L, 2L, bd("88"), bd("100"), bd("85"), bd("100"), 99L);
+        when(repo.insertar(any())).thenReturn(7L);
+        when(repo.buscar(7L)).thenReturn(Optional.of(
+                new Umbral(7L, 41L, 2L, bd("88"), bd("100"), bd("85"), bd("100"), 1, null, 99L)));
+
+        service.crear(req);
+
+        verify(bitacora).registrar(eq(99L), eq(41L), eq("CREAR_UMBRAL"), contains("88"));
+    }
+
+    @Test @DisplayName("editar deja en la bitacora el valor anterior y el nuevo")
+    void actualizar_registra_antes_y_despues() {
+        when(repo.buscar(7L))
+                .thenReturn(Optional.of(new Umbral(7L, 41L, 2L, bd("95"), bd("100"), bd("90"), bd("100"), 1, null, 99L)))
+                .thenReturn(Optional.of(new Umbral(7L, 41L, 2L, bd("88"), bd("100"), bd("85"), bd("100"), 1, null, 99L)));
+
+        service.actualizar(7L, new ActualizarUmbralRequest(bd("88"), bd("100"), bd("85"), bd("100"), 99L));
+
+        ArgumentCaptor<String> detalle = ArgumentCaptor.forClass(String.class);
+        verify(bitacora).registrar(eq(99L), eq(41L), eq("EDITAR_UMBRAL"), detalle.capture());
+        // Debe poder reconstruirse el cambio: el 95 de antes y el 88 de despues.
+        assertThat(detalle.getValue()).contains("95").contains("88");
+    }
+
+    @Test @DisplayName("el rango critico debe contener al normal")
+    void critico_debe_contener_al_normal() {
+        // Normal 90-100 con critico 95-100: un valor de 92 seria normal y critico a la vez.
+        CrearUmbralRequest req = new CrearUmbralRequest(41L, 2L, bd("90"), bd("100"), bd("95"), bd("100"), 99L);
+        assertThatThrownBy(() -> service.crear(req))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("minimo critico");
+        verify(repo, never()).insertar(any());
+        verify(bitacora, never()).registrar(any(), any(), any(), any());
+    }
+
+    @Test @DisplayName("un umbral invalido no se registra en la bitacora")
+    void umbral_invalido_no_audita() {
+        CrearUmbralRequest req = new CrearUmbralRequest(41L, 2L, bd("100"), bd("90"), bd("85"), bd("100"), 99L);
+        assertThatThrownBy(() -> service.crear(req)).isInstanceOf(ResponseStatusException.class);
+        verify(bitacora, never()).registrar(any(), any(), any(), any());
     }
 }
