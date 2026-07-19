@@ -7,11 +7,14 @@ import java.util.List;
  * Resultado de la escala de alerta temprana NEWS2 para un paciente, calculado a partir
  * de sus ultimas lecturas.
  *
- * Es una ADAPTACION de NEWS2: la escala original usa 7 parametros y PulsoCare captura 5
- * (FR, SpO2, temperatura, PAS y FC). Los dos que faltan —nivel de consciencia y si el
- * paciente recibe oxigeno suplementario— se asumen en su valor normal (alerta y aire
- * ambiente), que aportan 0 puntos. Por eso el puntaje es un piso, no el NEWS2 clinico
- * completo; sirve como senal de alerta temprana para que el medico revise.
+ * Cubre los 7 parametros de la escala clinica: FR, SpO2, temperatura, PAS, FC, nivel de
+ * consciencia y oxigeno suplementario. Estos dos ultimos existen en MIMIC como texto (el
+ * Glasgow por componentes, y el dispositivo de oxigeno) y el replayer los convierte a
+ * numero antes de publicarlos, para que entren al pipeline como cualquier otro signo.
+ *
+ * El total sigue siendo un piso cuando al paciente le falta alguna lectura: el detalle
+ * dice sobre cuantos parametros se calculo, y la vista lo advierte. Es una senal de
+ * alerta temprana para que el medico revise, no un diagnostico.
  */
 public record PuntajeNews2(
         int total,
