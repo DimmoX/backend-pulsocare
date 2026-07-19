@@ -49,13 +49,17 @@ public class UmbralService {
     @Transactional
     public Umbral crear(CrearUmbralRequest req) {
         validarRangos(req.valorMin(), req.valorMax(), req.valorMinCritico(), req.valorMaxCritico());
+        // Reemplaza el limite anterior en vez de acumular otro vigente para el mismo
+        // signo, que dejaria a la Lambda eligiendo entre dos rangos distintos.
+        int reemplazados = repo.desactivarVigentesDe(req.idPaciente(), req.idSignoVital());
         Umbral nuevo = new Umbral(null, req.idPaciente(), req.idSignoVital(),
                 req.valorMin(), req.valorMax(), req.valorMinCritico(), req.valorMaxCritico(),
                 null, null, req.idDefinidoPor());
         long id = repo.insertar(nuevo);
         Umbral creado = repo.buscar(id).orElseThrow();
 
-        bitacora.registrar(req.idDefinidoPor(), req.idPaciente(), "CREAR_UMBRAL",
+        bitacora.registrar(req.idDefinidoPor(), req.idPaciente(),
+                reemplazados > 0 ? "EDITAR_UMBRAL" : "CREAR_UMBRAL",
                 recortar("Signo %d: normal %s-%s, critico %s-%s".formatted(
                         req.idSignoVital(),
                         texto(req.valorMin()), texto(req.valorMax()),

@@ -163,9 +163,12 @@ def umbrales_de(cur, id_paciente):
           FROM PC_UMBRAL
          WHERE ID_PACIENTE = :id_paciente
            AND VIGENTE = 1
+         ORDER BY VIGENTE_DESDE
         """,
         id_paciente=id_paciente,
     )
+    # Ordenado por antiguedad: si por lo que sea quedaran dos vigentes para el mismo
+    # signo, gana el mas reciente en vez de uno al azar.
     definidos = {}
     for id_signo, n_min, n_max, c_min, c_max in cur:
         definidos[int(id_signo)] = (
