@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 
 @Service
@@ -60,10 +61,7 @@ public class UmbralService {
 
         bitacora.registrar(req.idDefinidoPor(), req.idPaciente(),
                 reemplazados > 0 ? "EDITAR_UMBRAL" : "CREAR_UMBRAL",
-                recortar("Signo %d: normal %s-%s, critico %s-%s".formatted(
-                        req.idSignoVital(),
-                        texto(req.valorMin()), texto(req.valorMax()),
-                        texto(req.valorMinCritico()), texto(req.valorMaxCritico()))));
+                recortar("Signo %d: %s".formatted(req.idSignoVital(), definidos(creado))));
 
         log.info("Umbral {} creado para paciente {} signo {} por usuario {}",
                 id, req.idPaciente(), req.idSignoVital(), req.idDefinidoPor());
@@ -80,15 +78,10 @@ public class UmbralService {
         repo.actualizar(id, cambios);
         Umbral despues = repo.buscar(id).orElseThrow();
 
-        // Se guarda el antes y el despues: para auditar un cambio de alarma no basta
-        // con saber como quedo, hay que poder reconstruir que se modifico.
+        // Solo los limites que realmente cambiaron: repetir los cuatro obliga a quien
+        // audita a comparar a ojo para encontrar el unico que se movio.
         bitacora.registrar(req.idDefinidoPor(), antes.idPaciente(), "EDITAR_UMBRAL",
-                recortar("Signo %d: normal %s-%s -> %s-%s, critico %s-%s -> %s-%s".formatted(
-                        antes.idSignoVital(),
-                        texto(antes.valorMin()), texto(antes.valorMax()),
-                        texto(despues.valorMin()), texto(despues.valorMax()),
-                        texto(antes.valorMinCritico()), texto(antes.valorMaxCritico()),
-                        texto(despues.valorMinCritico()), texto(despues.valorMaxCritico()))));
+                recortar("Signo %d: %s".formatted(antes.idSignoVital(), cambios(antes, despues))));
 
         log.info("Umbral {} actualizado por usuario {}", id, req.idDefinidoPor());
         return despues;
@@ -102,10 +95,8 @@ public class UmbralService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Umbral " + id + " no encontrado");
         }
         bitacora.registrar(idUsuario, antes.idPaciente(), "ELIMINAR_UMBRAL",
-                recortar("Signo %d vuelve al rango por defecto (era normal %s-%s, critico %s-%s)"
-                        .formatted(antes.idSignoVital(),
-                                texto(antes.valorMin()), texto(antes.valorMax()),
-                                texto(antes.valorMinCritico()), texto(antes.valorMaxCritico()))));
+                recortar("Signo %d vuelve a los valores por defecto (tenía %s)"
+                        .formatted(antes.idSignoVital(), definidos(antes))));
         log.info("Umbral {} desactivado por usuario {}", id, idUsuario);
     }
 
@@ -136,6 +127,52 @@ public class UmbralService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "El maximo critico debe ser mayor o igual que el maximo normal");
         }
+    }
+
+    /**
+     * Etiquetas de los cuatro limites. Son las mismas que rotulan las columnas en la
+     * pantalla de limites de alarma: quien audita reconoce de inmediato que campo se
+     * toco sin tener que traducir nada.
+     */
+    private static final String MIN_NORMAL = "Mín. normal";
+    private static final String MAX_NORMAL = "Máx. normal";
+    private static final String MIN_CRITICO = "Mín. crítico";
+    private static final String MAX_CRITICO = "Máx. crítico";
+
+    /** Los limites que quedaron definidos, para cuando no hay un estado anterior. */
+    private static String definidos(Umbral u) {
+        List<String> partes = new ArrayList<>();
+        if (u.valorMin() != null) partes.add(MIN_NORMAL + ": " + texto(u.valorMin()));
+        if (u.valorMax() != null) partes.add(MAX_NORMAL + ": " + texto(u.valorMax()));
+        if (u.valorMinCritico() != null) partes.add(MIN_CRITICO + ": " + texto(u.valorMinCritico()));
+        if (u.valorMaxCritico() != null) partes.add(MAX_CRITICO + ": " + texto(u.valorMaxCritico()));
+        return partes.isEmpty() ? "sin límites definidos" : String.join(", ", partes);
+    }
+
+    /** Solo los limites cuyo valor cambio, con su valor anterior y el nuevo. */
+    private static String cambios(Umbral antes, Umbral despues) {
+        List<String> partes = new ArrayList<>();
+        agregarSiCambio(partes, MIN_NORMAL, antes.valorMin(), despues.valorMin());
+        agregarSiCambio(partes, MAX_NORMAL, antes.valorMax(), despues.valorMax());
+        agregarSiCambio(partes, MIN_CRITICO, antes.valorMinCritico(), despues.valorMinCritico());
+        agregarSiCambio(partes, MAX_CRITICO, antes.valorMaxCritico(), despues.valorMaxCritico());
+        return partes.isEmpty() ? "sin cambios" : String.join(", ", partes);
+    }
+
+    private static void agregarSiCambio(List<String> partes, String etiqueta,
+                                        BigDecimal antes, BigDecimal despues) {
+        if (sonIguales(antes, despues)) return;
+        partes.add("%s: %s -> %s".formatted(etiqueta, texto(antes), texto(despues)));
+    }
+
+    /**
+     * compareTo y no equals: la base devuelve NUMBER(6,2), asi que un 60 recien enviado
+     * vuelve como 60.00. Con equals serian distintos y la bitacora reportaria un cambio
+     * que nunca ocurrio.
+     */
+    private static boolean sonIguales(BigDecimal a, BigDecimal b) {
+        if (a == null || b == null) return a == b;
+        return a.compareTo(b) == 0;
     }
 
     private static String texto(BigDecimal valor) {
