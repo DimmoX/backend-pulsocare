@@ -90,6 +90,9 @@ services:
   ms-gateway:
     image: ${DOCKERHUB_USER}/pulsocare-ms-gateway:latest
     environment:
+      # Autenticacion: token de B2C para usuarios, clave compartida para el
+      # replayer (que no tiene usuario y solo puede consultar /api/pacientes).
+      SERVICE_API_KEY: ${SERVICE_API_KEY:-}
       SERVER_PORT: 8080
       MS_AUTH_URI: http://ms-auth:8082
       MS_PACIENTES_URI: http://ms-pacientes:8081
