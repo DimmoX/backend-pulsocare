@@ -494,6 +494,14 @@ INSERT INTO PC_SIGNO_VITAL (CODIGO, NOMBRE, UNIDAD, ITEMID_MIMIC, RANGO_MIN, RAN
 INSERT INTO PC_SIGNO_VITAL (CODIGO, NOMBRE, UNIDAD, ITEMID_MIMIC, RANGO_MIN, RANGO_MAX, DECIMALES) VALUES ('TEMP', 'Temperatura',             'C',    223762, 35.5, 37.5, 1);
 INSERT INTO PC_SIGNO_VITAL (CODIGO, NOMBRE, UNIDAD, ITEMID_MIMIC, RANGO_MIN, RANGO_MAX, DECIMALES) VALUES ('FR',   'Frecuencia respiratoria', 'rpm',  220210, 12, 20,  0);
 
+-- Los dos parametros que completan la escala NEWS2 (que evalua 7). Van sin
+-- ITEMID_MIMIC porque no se copian de una fila: se derivan en el replayer a partir
+-- de varias columnas de texto de MIMIC y llegan ya numericos.
+--   GCS   : escala de Glasgow, 3 a 15. Solo 15 es "alerta"; por debajo hay deterioro.
+--   O2SUP : 0 = respira aire ambiente, 1 = recibe oxigeno suplementario.
+INSERT INTO PC_SIGNO_VITAL (CODIGO, NOMBRE, UNIDAD, ITEMID_MIMIC, RANGO_MIN, RANGO_MAX, DECIMALES) VALUES ('GCS',  'Nivel de conciencia',     'pts',  NULL,   15, 15,  0);
+INSERT INTO PC_SIGNO_VITAL (CODIGO, NOMBRE, UNIDAD, ITEMID_MIMIC, RANGO_MIN, RANGO_MAX, DECIMALES) VALUES ('O2SUP','Oxigeno suplementario',   's/n',  NULL,   0,  0,   0);
+
 COMMIT;
 
 --------------------------------------------------------------------------------
