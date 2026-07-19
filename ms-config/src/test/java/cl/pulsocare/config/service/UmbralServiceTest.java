@@ -104,12 +104,16 @@ class UmbralServiceTest {
         verify(repo, never()).insertar(any());
     }
 
-    @Test @DisplayName("crear con limites nulos (rango parcial) es valido")
-    void crear_conNulos_permitido() {
-        when(repo.insertar(any())).thenReturn(8L);
-        when(repo.buscar(8L)).thenReturn(Optional.of(umbral(8)));
-        // solo define el maximo critico; el resto null no debe fallar la validacion
-        assertThat(service.crear(crear(null, null, null, "130"))).isNotNull();
+    @Test @DisplayName("crear con limites nulos (rango parcial) ya NO es valido")
+    void crear_conNulos_seRechaza() {
+        // Antes se permitia un umbral parcial. Se cambio la regla: un limite sin definir
+        // dejaba al sistema clasificando ese signo con una mezcla de valores propios y
+        // por defecto, y en el frontend un null hacia que `valor > null` fuera true y
+        // toda lectura saliera como critica.
+        assertThatThrownBy(() -> service.crear(crear(null, null, null, "130")))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("obligatorios");
+        verify(repo, never()).insertar(any());
     }
 
     // ---- actualizar / desactivar --------------------------------------------
@@ -235,5 +239,26 @@ class UmbralServiceTest {
         verify(bitacora).registrar(eq(99L), eq(41L), eq("CREAR_UMBRAL"), detalle.capture());
         assertThat(detalle.getValue())
                 .isEqualTo("Signo 2: Mín. normal: 88, Máx. normal: 100, Mín. crítico: 85, Máx. crítico: 100");
+    }
+
+    @Test @DisplayName("un umbral sin ningun limite se rechaza")
+    void umbral_vacio_se_rechaza() {
+        // Se creo uno asi desde la pantalla y dejo la ficha marcando todo como critico:
+        // en el frontend `valor > null` es true.
+        CrearUmbralRequest req = new CrearUmbralRequest(41L, 2L, null, null, null, null, 99L);
+        assertThatThrownBy(() -> service.crear(req))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("obligatorios");
+        verify(repo, never()).insertar(any());
+        verify(bitacora, never()).registrar(any(), any(), any(), any());
+    }
+
+    @Test @DisplayName("un umbral con solo algunos limites tambien se rechaza")
+    void umbral_parcial_se_rechaza() {
+        CrearUmbralRequest req = new CrearUmbralRequest(41L, 2L, bd("88"), bd("100"), null, null, 99L);
+        assertThatThrownBy(() -> service.crear(req))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("obligatorios");
+        verify(repo, never()).insertar(any());
     }
 }
