@@ -56,3 +56,30 @@ def test_diastolica_21_es_critico():
 def test_signo_desconocido_se_trata_como_normal():
     # Un itemid fuera del catalogo no debe generar alerta
     assert lf.clasificar("999999", 50) == (lf.ESTADO_NORMAL, None)
+
+
+# --- los dos parametros que completan NEWS2 ---------------------------------
+# Son categoricos, no magnitudes continuas: un rango mal puesto haria que un
+# paciente con una canula de oxigeno figure como critico.
+
+def test_glasgow_15_es_normal():
+    assert lf.clasificar("GCS", 15) == (lf.ESTADO_NORMAL, None)
+
+
+def test_glasgow_14_es_atencion():
+    # NEWS2 no gradua la conciencia, pero el estado de la lectura si: 14 no es
+    # "alerta" y tampoco es una emergencia.
+    assert lf.clasificar("GCS", 14) == (lf.ESTADO_ATENCION, lf.NIVEL_ATENCION)
+
+
+def test_glasgow_bajo_13_es_critico():
+    assert lf.clasificar("GCS", 12) == (lf.ESTADO_CRITICO, lf.NIVEL_CRITICO)
+
+
+def test_aire_ambiente_es_normal():
+    assert lf.clasificar("O2SUP", 0) == (lf.ESTADO_NORMAL, None)
+
+
+def test_con_oxigeno_es_atencion_no_critico():
+    # Necesitar oxigeno nunca es "normal", pero tampoco es por si solo una urgencia.
+    assert lf.clasificar("O2SUP", 1) == (lf.ESTADO_ATENCION, lf.NIVEL_ATENCION)

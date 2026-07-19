@@ -48,6 +48,12 @@ SIGNOS = {
     "220180": (4, 60, 80, 40, 110),      # Presion diastolica (mmHg)
     "223762": (5, 36.0, 37.5, 35.0, 39.0),  # Temperatura (C)
     "220210": (6, 12, 20, 8, 30),        # Frecuencia respiratoria (insp/min)
+    # Los dos parametros que completan NEWS2. No son itemid de MIMIC: el replayer los
+    # deriva de varias filas de texto (los tres componentes del Glasgow, y el
+    # dispositivo de oxigeno) y los publica ya numericos. IDs 21 y 22 verificados
+    # contra PC_SIGNO_VITAL (2026-07-19): la secuencia ya habia avanzado, no son 7 y 8.
+    "GCS": (21, 15, 15, 13, 15),         # Glasgow 3-15: solo 15 es "alerta"
+    "O2SUP": (22, 0, 0, 0, 1),           # 0 = aire ambiente, 1 = recibe oxigeno
 }
 
 # Codigos de estado de lectura (PC_ESTADO_LECTURA verificado en la BD)
