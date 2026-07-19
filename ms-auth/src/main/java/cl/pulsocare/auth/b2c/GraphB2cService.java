@@ -76,9 +76,14 @@ public class GraphB2cService {
                         "issuer", issuerDomain,
                         "issuerAssignedId", correo)),
                 "otherMails", List.of(correo),
+                // forceChangePasswordNextSignIn va en false a proposito: los user flows
+                // de B2C NO soportan el cambio forzado de contrasena. Con true, el
+                // usuario no puede entrar nunca y B2C reporta el caso como si la
+                // contrasena fuera incorrecta, que despista por completo. El cambio de
+                // contrasena se ofrece por el flujo de recuperacion.
                 "passwordProfile", Map.of(
                         "password", passwordTemporal,
-                        "forceChangePasswordNextSignIn", true),
+                        "forceChangePasswordNextSignIn", false),
                 "passwordPolicies", "DisablePasswordExpiration");
 
         try {
