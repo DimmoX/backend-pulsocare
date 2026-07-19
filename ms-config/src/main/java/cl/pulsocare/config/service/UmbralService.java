@@ -111,19 +111,27 @@ public class UmbralService {
      */
     private void validarRangos(BigDecimal min, BigDecimal max,
                                BigDecimal minCritico, BigDecimal maxCritico) {
-        if (min != null && max != null && min.compareTo(max) > 0) {
+        // Un umbral tiene que definir sus cuatro limites. Uno a medias deja al sistema
+        // clasificando ese signo con una mezcla de valores propios y por defecto, y uno
+        // enteramente vacio es un registro que no significa nada: ya se creo uno asi
+        // desde la pantalla y dejo la ficha marcando todo como critico.
+        if (min == null || max == null || minCritico == null || maxCritico == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Los cuatro limites son obligatorios: minimo y maximo normal, minimo y maximo critico");
+        }
+        if (min.compareTo(max) > 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "El minimo normal no puede ser mayor que el maximo normal");
         }
-        if (minCritico != null && maxCritico != null && minCritico.compareTo(maxCritico) > 0) {
+        if (minCritico.compareTo(maxCritico) > 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "El minimo critico no puede ser mayor que el maximo critico");
         }
-        if (minCritico != null && min != null && minCritico.compareTo(min) > 0) {
+        if (minCritico.compareTo(min) > 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "El minimo critico debe ser menor o igual que el minimo normal");
         }
-        if (maxCritico != null && max != null && maxCritico.compareTo(max) < 0) {
+        if (maxCritico.compareTo(max) < 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "El maximo critico debe ser mayor o igual que el maximo normal");
         }
