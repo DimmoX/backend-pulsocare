@@ -42,6 +42,21 @@
       <artifactId>spring-cloud-starter-gateway</artifactId>
     </dependency>
     <!-- Pruebas: JUnit 5 + Mockito + AssertJ (gestionados por el parent) -->
+    <!-- Valida el JWT que emite Azure AD B2C. Sin esto el gateway enrutaba
+         cualquier peticion, con token o sin el. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-security</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-webflux</artifactId>
+    </dependency>
+
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>

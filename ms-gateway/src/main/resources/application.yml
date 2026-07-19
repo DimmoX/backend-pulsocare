@@ -6,6 +6,19 @@
 # nombre del servicio (p. ej. http://ms-auth:8082).
 # ==========================================================================
 spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Valores del tenant B2C, verificados contra su metadata OIDC.
+          # El issuer lleva el id del tenant, NO el nombre: b2clogin devuelve
+          # .../cd872f70-.../v2.0/ y si no coincide exacto, TODO token se rechaza.
+          issuer-uri: ${B2C_ISSUER_URI:https://pulsocareduoc.b2clogin.com/cd872f70-8721-47a9-9b37-08b113c989ec/v2.0/}
+          jwk-set-uri: ${B2C_JWK_SET_URI:https://pulsocareduoc.b2clogin.com/pulsocareduoc.onmicrosoft.com/b2c_1_sign_in/discovery/v2.0/keys}
+          # El frontend pide su propio clientId como scope, asi que el token viene
+          # dirigido a el.
+          audiences: ${B2C_AUDIENCE:bbc1023b-e89e-4fd1-925c-141f8d7d148c}
+
   application:
     name: ms-gateway
   cloud:
@@ -58,6 +71,10 @@ spring:
 
       # CORS para que el frontend Angular (dev server) pueda llamar al gateway.
       globalcors:
+        # Sin esto el preflight OPTIONS no entra al mapeo de rutas del gateway y se
+        # responde 403, con lo que el navegador bloquea TODAS las llamadas del
+        # frontend (que van con cabecera Authorization y por eso siempre lo disparan).
+        add-to-simple-url-handler-mapping: true
         cors-configurations:
           '[/**]':
             allowedOrigins:
@@ -75,3 +92,8 @@ server:
 logging:
   level:
     cl.pulsocare: INFO
+
+# Clave que presentan los procesos internos sin usuario (el replayer) para consultar
+# la lista de pacientes. Sin valor definido, esa puerta queda cerrada.
+pulsocare:
+  clave-servicio: ${SERVICE_API_KEY:}
