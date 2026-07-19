@@ -176,4 +176,64 @@ class UmbralServiceTest {
         assertThatThrownBy(() -> service.crear(req)).isInstanceOf(ResponseStatusException.class);
         verify(bitacora, never()).registrar(any(), any(), any(), any());
     }
+
+    // --- el detalle debe decir QUE cambio, no repetir los cuatro limites --------
+
+    @Test @DisplayName("editar solo un limite registra solo ese limite")
+    void detalle_lista_solo_lo_que_cambio() {
+        when(repo.buscar(7L))
+                .thenReturn(Optional.of(new Umbral(7L, 41L, 1L, bd("60"), bd("100"), bd("40"), bd("130"), 1, null, 99L)))
+                .thenReturn(Optional.of(new Umbral(7L, 41L, 1L, bd("60"), bd("105"), bd("40"), bd("130"), 1, null, 99L)));
+
+        service.actualizar(7L, new ActualizarUmbralRequest(bd("60"), bd("105"), bd("40"), bd("130"), 99L));
+
+        ArgumentCaptor<String> detalle = ArgumentCaptor.forClass(String.class);
+        verify(bitacora).registrar(eq(99L), eq(41L), eq("EDITAR_UMBRAL"), detalle.capture());
+        assertThat(detalle.getValue())
+                .isEqualTo("Signo 1: Máx. normal: 100 -> 105")
+                .doesNotContain("crítico");   // no se toco, no debe aparecer
+    }
+
+    @Test @DisplayName("cambiar dos limites los lista ambos")
+    void detalle_lista_los_dos_que_cambiaron() {
+        when(repo.buscar(7L))
+                .thenReturn(Optional.of(new Umbral(7L, 41L, 1L, bd("60"), bd("100"), bd("40"), bd("130"), 1, null, 99L)))
+                .thenReturn(Optional.of(new Umbral(7L, 41L, 1L, bd("60"), bd("105"), bd("35"), bd("130"), 1, null, 99L)));
+
+        service.actualizar(7L, new ActualizarUmbralRequest(bd("60"), bd("105"), bd("35"), bd("130"), 99L));
+
+        ArgumentCaptor<String> detalle = ArgumentCaptor.forClass(String.class);
+        verify(bitacora).registrar(any(), any(), any(), detalle.capture());
+        assertThat(detalle.getValue()).isEqualTo("Signo 1: Máx. normal: 100 -> 105, Mín. crítico: 40 -> 35");
+    }
+
+    @Test @DisplayName("distinta escala no es un cambio (60 y 60.00 son el mismo valor)")
+    void escala_distinta_no_cuenta_como_cambio() {
+        // La base devuelve NUMBER(6,2): un 60 enviado vuelve como 60.00. Con equals()
+        // en vez de compareTo, la bitacora reportaria un cambio que nunca ocurrio.
+        when(repo.buscar(7L))
+                .thenReturn(Optional.of(new Umbral(7L, 41L, 1L, bd("60.00"), bd("100.00"), bd("40.00"), bd("130.00"), 1, null, 99L)))
+                .thenReturn(Optional.of(new Umbral(7L, 41L, 1L, bd("60"), bd("105"), bd("40"), bd("130"), 1, null, 99L)));
+
+        service.actualizar(7L, new ActualizarUmbralRequest(bd("60"), bd("105"), bd("40"), bd("130"), 99L));
+
+        ArgumentCaptor<String> detalle = ArgumentCaptor.forClass(String.class);
+        verify(bitacora).registrar(any(), any(), any(), detalle.capture());
+        assertThat(detalle.getValue()).isEqualTo("Signo 1: Máx. normal: 100 -> 105");
+    }
+
+    @Test @DisplayName("al crear se listan los limites definidos, con su etiqueta")
+    void detalle_al_crear_lista_los_definidos() {
+        CrearUmbralRequest req = new CrearUmbralRequest(41L, 2L, bd("88"), bd("100"), bd("85"), bd("100"), 99L);
+        when(repo.insertar(any())).thenReturn(7L);
+        when(repo.buscar(7L)).thenReturn(Optional.of(
+                new Umbral(7L, 41L, 2L, bd("88"), bd("100"), bd("85"), bd("100"), 1, null, 99L)));
+
+        service.crear(req);
+
+        ArgumentCaptor<String> detalle = ArgumentCaptor.forClass(String.class);
+        verify(bitacora).registrar(eq(99L), eq(41L), eq("CREAR_UMBRAL"), detalle.capture());
+        assertThat(detalle.getValue())
+                .isEqualTo("Signo 2: Mín. normal: 88, Máx. normal: 100, Mín. crítico: 85, Máx. crítico: 100");
+    }
 }
