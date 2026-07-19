@@ -158,4 +158,46 @@ class CalculadoraNews2Test {
         assertThat(r.nivelRiesgo()).isEqualTo("BAJO");
         assertThat(r.detalle()).isEmpty();
     }
+
+    @Test
+    @DisplayName("Glasgow 15 -> alerta, 0 puntos")
+    void concienciaAlerta() {
+        var r = CalculadoraNews2.calcular(List.of(lec("GCS", "15")));
+        assertThat(r.total()).isZero();
+        assertThat(r.banderaRoja()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Glasgow bajo 15 -> 3 puntos y bandera roja (NEWS2 no gradua la conciencia)")
+    void concienciaAlterada() {
+        // 14 ya no es "alerta": NEWS2 salta directo a 3, no hay puntajes intermedios.
+        var r = CalculadoraNews2.calcular(List.of(lec("GCS", "14")));
+        assertThat(r.total()).isEqualTo(3);
+        assertThat(r.banderaRoja()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Aire ambiente -> 0 puntos; con oxigeno -> 2 puntos")
+    void oxigenoSuplementario() {
+        assertThat(CalculadoraNews2.calcular(List.of(lec("O2SUP", "0"))).total()).isZero();
+
+        var conOxigeno = CalculadoraNews2.calcular(List.of(lec("O2SUP", "1")));
+        assertThat(conOxigeno.total()).isEqualTo(2);
+        // 2 puntos no es bandera roja: esa se reserva a un parametro con 3.
+        assertThat(conOxigeno.banderaRoja()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Los 7 parametros juntos suman como la escala clinica")
+    void escalaCompleta() {
+        // Caso real sembrado (paciente 2): GCS 9 (3) + O2 si (2) + FR 22 (2) = 7.
+        var r = CalculadoraNews2.calcular(List.of(
+                lec("FR", "22"), lec("SPO2", "97"), lec("FC", "80"),
+                lec("PAS", "120"), lec("TEMP", "36.7"),
+                lec("GCS", "9"), lec("O2SUP", "1")));
+        assertThat(r.total()).isEqualTo(7);
+        assertThat(r.nivelRiesgo()).isEqualTo("ALTO");
+        assertThat(r.banderaRoja()).isTrue();
+        assertThat(r.detalle()).hasSize(7);
+    }
 }
