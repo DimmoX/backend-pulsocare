@@ -106,7 +106,9 @@ class CursorFalso:
     haria Oracle: las N mas recientes primero.
     """
 
-    def __init__(self, historial=(), separacion_seg=7):
+    def __init__(self, historial=(), separacion_seg=7, umbrales=()):
+        self.umbrales = list(umbrales)
+        self._umbrales = []
         self.separacion = separacion_seg
         self.lecturas = [
             (estado, INICIO + timedelta(seconds=i * separacion_seg))
@@ -122,7 +124,9 @@ class CursorFalso:
 
     def execute(self, sql, **params):
         sql = " ".join(sql.split())
-        if "INSERT INTO PC_LECTURA_SIGNO_VITAL" in sql:
+        if sql.startswith("SELECT ID_SIGNO_VITAL, VALOR_MIN"):
+            self._umbrales = self.umbrales          # los que definio el medico
+        elif "INSERT INTO PC_LECTURA_SIGNO_VITAL" in sql:
             self.inserciones.append("LECTURA")
             siguiente = (
                 self.lecturas[-1][1] + timedelta(seconds=self.separacion)
@@ -141,10 +145,17 @@ class CursorFalso:
     def fetchone(self):
         return self._filas[0] if self._filas else None
 
+    def __iter__(self):
+        # umbrales_de() recorre el cursor directamente
+        return iter(self._umbrales)
 
-def _correr(monkeypatch, itemid, valor, historial=(), separacion_seg=7):
+
+def _correr(monkeypatch, itemid, valor, historial=(), separacion_seg=7, umbrales=()):
     """Corre el handler sobre un historial dado. Devuelve (cursor, sqs, resultado)."""
-    cursor = CursorFalso(historial, separacion_seg)
+    # El cache de umbrales vive en una global que sobrevive entre invocaciones de
+    # Lambda; sin limpiarlo, un test arrastraria los umbrales del anterior.
+    monkeypatch.setattr(lf, "_umbrales_por_paciente", {})
+    cursor = CursorFalso(historial, separacion_seg, umbrales)
     conexion = MagicMock()
     conexion.cursor.return_value = cursor
     monkeypatch.setattr(lf, "obtener_conexion", lambda *a, **k: conexion)
@@ -256,3 +267,69 @@ def test_glasgow_critico_alerta_a_la_primera(monkeypatch):
     assert "ALERTA" in cursor.inserciones
     assert resultado["alertas"] == 1
     sqs.send_message.assert_called_once()
+
+
+# --- umbrales por paciente --------------------------------------------------
+# El rango poblacional no le sirve a todos: un paciente con EPOC vive con SpO2 de
+# 88-92 y alarmarlo bajo 95 solo produce ruido. PC_UMBRAL manda sobre el default.
+
+def test_sin_umbral_propio_usa_el_rango_poblacional():
+    assert lf.clasificar("220277", 93) == (lf.ESTADO_ATENCION, lf.NIVEL_ATENCION)
+
+
+def test_umbral_propio_normaliza_un_valor_que_era_alerta():
+    # Paciente con EPOC: 88-100 normal, critico bajo 85.
+    epoc = (88.0, 100.0, 85.0, 100.0)
+    assert lf.clasificar("220277", 93, epoc) == (lf.ESTADO_NORMAL, None)
+    assert lf.clasificar("220277", 87, epoc) == (lf.ESTADO_ATENCION, lf.NIVEL_ATENCION)
+    assert lf.clasificar("220277", 84, epoc) == (lf.ESTADO_CRITICO, lf.NIVEL_CRITICO)
+
+
+def test_umbral_parcial_conserva_los_demas_limites():
+    # Solo se ajusta el minimo normal; los otros tres siguen siendo los por defecto
+    # (95-100 normal, 90-100 critico), asi que 89 sigue siendo critico.
+    solo_min = (88.0, None, None, None)
+    assert lf.clasificar("220277", 92, solo_min) == (lf.ESTADO_NORMAL, None)
+    assert lf.clasificar("220277", 89, solo_min) == (lf.ESTADO_CRITICO, lf.NIVEL_CRITICO)
+
+
+def test_umbrales_de_cachea_y_no_reconsulta(monkeypatch):
+    """Sin cache seria una consulta extra por cada lectura del stream."""
+    class CursorContador:
+        def __init__(self):
+            self.consultas = 0
+            self._filas = []
+
+        def execute(self, _sql, **_p):
+            self.consultas += 1
+            self._filas = [(2, 88, 100, 85, 100)]
+
+        def __iter__(self):
+            return iter(self._filas)
+
+    monkeypatch.setattr(lf, "_umbrales_por_paciente", {})
+    cursor = CursorContador()
+    primera = lf.umbrales_de(cursor, 41)
+    segunda = lf.umbrales_de(cursor, 41)
+    assert cursor.consultas == 1
+    assert primera == segunda == {2: (88.0, 100.0, 85.0, 100.0)}
+
+
+def test_umbrales_de_relee_cuando_expira_el_ttl(monkeypatch):
+    """El medico debe ver el efecto de su cambio, no un valor cacheado para siempre."""
+    class CursorContador:
+        def __init__(self):
+            self.consultas = 0
+
+        def execute(self, _sql, **_p):
+            self.consultas += 1
+
+        def __iter__(self):
+            return iter([])
+
+    monkeypatch.setattr(lf, "_umbrales_por_paciente", {})
+    monkeypatch.setattr(lf, "UMBRALES_TTL_SEG", 0)
+    cursor = CursorContador()
+    lf.umbrales_de(cursor, 41)
+    lf.umbrales_de(cursor, 41)
+    assert cursor.consultas == 2

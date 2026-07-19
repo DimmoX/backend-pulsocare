@@ -96,6 +96,19 @@ public class UmbralRepository {
         return jdbc.update("UPDATE PC_UMBRAL SET VIGENTE = 0 WHERE ID_UMBRAL = ?", id);
     }
 
+    /**
+     * Da de baja los umbrales vigentes de ese paciente y signo, y devuelve cuantos eran.
+     *
+     * Un paciente no puede tener dos limites vigentes para el mismo signo: cual gana
+     * dependeria del orden en que la base devuelva las filas. Las anteriores quedan con
+     * VIGENTE = 0 en vez de borrarse, para conservar el historial de ajustes.
+     */
+    public int desactivarVigentesDe(long idPaciente, long idSignoVital) {
+        return jdbc.update(
+                "UPDATE PC_UMBRAL SET VIGENTE = 0 WHERE ID_PACIENTE = ? AND ID_SIGNO_VITAL = ? AND VIGENTE = 1",
+                idPaciente, idSignoVital);
+    }
+
     private static void setNullableLong(PreparedStatement ps, int idx, Long v) throws SQLException {
         if (v == null) ps.setNull(idx, java.sql.Types.NUMERIC); else ps.setLong(idx, v);
     }

@@ -47,10 +47,15 @@ public class UmbralController {
         return service.actualizar(id, req);
     }
 
-    /** Baja logica del umbral (VIGENTE = 0). */
+    /**
+     * Baja logica del umbral: el signo vuelve a su rango por defecto.
+     *
+     * Pide idUsuario porque el cambio queda en la bitacora, y un ajuste de alarma sin
+     * responsable identificado no es auditable.
+     */
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void desactivar(@PathVariable long id) {
-        service.desactivar(id);
+    public void desactivar(@PathVariable long id, @RequestParam Long idUsuario) {
+        service.desactivar(id, idUsuario);
     }
 }

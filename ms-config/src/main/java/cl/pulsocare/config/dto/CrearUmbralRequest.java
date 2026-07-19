@@ -5,9 +5,11 @@ import jakarta.validation.constraints.NotNull;
 import java.math.BigDecimal;
 
 /**
- * Datos para definir un umbral. Los valores son opcionales (un signo puede
- * controlar solo minimo, solo maximo, o ambos); idDefinidoPor es el medico que
- * lo ajusta.
+ * Datos para definir un umbral. Los valores son opcionales (un signo puede controlar
+ * solo minimo, solo maximo, o ambos).
+ *
+ * idDefinidoPor es obligatorio: identifica al medico que ajusta la alarma y es lo que
+ * queda en la bitacora. Sin el, el cambio no seria auditable.
  */
 public record CrearUmbralRequest(
         @NotNull Long idPaciente,
@@ -16,5 +18,5 @@ public record CrearUmbralRequest(
         BigDecimal valorMax,
         BigDecimal valorMinCritico,
         BigDecimal valorMaxCritico,
-        Long idDefinidoPor
+        @NotNull Long idDefinidoPor
 ) {}

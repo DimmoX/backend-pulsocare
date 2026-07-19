@@ -8,6 +8,8 @@ Se dispara automaticamente cuando llegan registros al Data Stream de Kinesis
 
   1) decodifica el evento (Kinesis entrega los records en base64),
   2) evalua la lectura contra los umbrales del paciente (NORMAL/ATENCION/CRITICO),
+     tomando los de PC_UMBRAL si el equipo medico definio alguno, y si no los
+     rangos poblacionales por defecto,
   3) persiste en PC_LECTURA_SIGNO_VITAL,
   4) si el estado EMPEORO respecto de la lectura anterior, genera PC_ALERTA,
   5) y solo si esa alerta es critica, la publica a SQS para que se notifique.
@@ -43,8 +45,8 @@ _sqs = boto3.client("sqs") if SQS_QUEUE_URL else None
 
 # ---------------------------------------------------------------------------
 # 1) Catalogo de signos vitales y rangos de referencia
-#    (en produccion los umbrales POR PACIENTE salen de PC_UMBRAL / ElastiCache;
-#     estos son el fallback por defecto)
+#    Son rangos POBLACIONALES y sirven de respaldo. Cuando el equipo medico define
+#    un umbral para un paciente concreto (PC_UMBRAL), ese manda: ver umbrales_de().
 # ---------------------------------------------------------------------------
 # itemid -> (id_signo_vital_en_BD, normal_min, normal_max, critico_min, critico_max)
 # IDs verificados contra PC_SIGNO_VITAL en la BD (2026-06-27).
@@ -99,6 +101,16 @@ VENTANA_CONFIRMACION_SEG = int(os.environ.get("VENTANA_CONFIRMACION_SEG", "120")
 # deterioro de conciencia no alerta NUNCA, que es el peor fallo posible aqui.
 SIN_CONFIRMACION = {"GCS", "O2SUP"}
 
+# Cuanto se reutiliza el umbral de un paciente antes de volver a leerlo de la BD.
+# Consultarlo en cada lectura seria una consulta extra por evento; no consultarlo
+# nunca haria que ajustar un umbral desde la plataforma no sirviera de nada. Con 60s
+# el medico ve el efecto de su cambio dentro del minuto siguiente.
+UMBRALES_TTL_SEG = int(os.environ.get("UMBRALES_TTL_SEG", "60"))
+
+# id_paciente -> ({id_signo: (n_min, n_max, c_min, c_max)}, momento de la lectura).
+# Vive en el contenedor de Lambda, que AWS reutiliza entre invocaciones.
+_umbrales_por_paciente = {}
+
 
 # ---------------------------------------------------------------------------
 # 2) Conexion a Oracle Autonomous (con wallet)
@@ -133,12 +145,62 @@ def obtener_conexion(intentos=3, espera_seg=2):
 # ---------------------------------------------------------------------------
 # 3) Clasificacion de la lectura segun los umbrales
 # ---------------------------------------------------------------------------
-def clasificar(itemid, valor):
-    """Devuelve (id_estado_lectura, nivel_alerta_o_None)."""
+def umbrales_de(cur, id_paciente):
+    """
+    Umbrales vigentes que el equipo medico definio para este paciente.
+
+    Los rangos de SIGNOS son poblacionales y no le sirven a todo el mundo: un paciente
+    con EPOC vive con una saturacion de 88-92 y alarmarlo bajo 95 solo produce ruido.
+    Por eso PC_UMBRAL manda sobre el valor por defecto cuando existe.
+    """
+    cacheado = _umbrales_por_paciente.get(id_paciente)
+    if cacheado is not None and (time.time() - cacheado[1]) < UMBRALES_TTL_SEG:
+        return cacheado[0]
+
+    cur.execute(
+        """
+        SELECT ID_SIGNO_VITAL, VALOR_MIN, VALOR_MAX, VALOR_MIN_CRITICO, VALOR_MAX_CRITICO
+          FROM PC_UMBRAL
+         WHERE ID_PACIENTE = :id_paciente
+           AND VIGENTE = 1
+         ORDER BY VIGENTE_DESDE
+        """,
+        id_paciente=id_paciente,
+    )
+    # Ordenado por antiguedad: si por lo que sea quedaran dos vigentes para el mismo
+    # signo, gana el mas reciente en vez de uno al azar.
+    definidos = {}
+    for id_signo, n_min, n_max, c_min, c_max in cur:
+        definidos[int(id_signo)] = (
+            float(n_min) if n_min is not None else None,
+            float(n_max) if n_max is not None else None,
+            float(c_min) if c_min is not None else None,
+            float(c_max) if c_max is not None else None,
+        )
+    _umbrales_por_paciente[id_paciente] = (definidos, time.time())
+    return definidos
+
+
+def clasificar(itemid, valor, umbral=None):
+    """
+    Devuelve (id_estado_lectura, nivel_alerta_o_None).
+
+    `umbral` son los limites propios del paciente para este signo. Cada limite se
+    aplica por separado: un medico puede ajustar solo el minimo critico y dejar los
+    otros tres en su valor por defecto.
+    """
     cfg = SIGNOS.get(itemid)
     if cfg is None:
         return ESTADO_NORMAL, None
     _, n_min, n_max, c_min, c_max = cfg
+
+    if umbral is not None:
+        propio_n_min, propio_n_max, propio_c_min, propio_c_max = umbral
+        n_min = propio_n_min if propio_n_min is not None else n_min
+        n_max = propio_n_max if propio_n_max is not None else n_max
+        c_min = propio_c_min if propio_c_min is not None else c_min
+        c_max = propio_c_max if propio_c_max is not None else c_max
+
     if valor < c_min or valor > c_max:
         return ESTADO_CRITICO, NIVEL_CRITICO
     if valor < n_min or valor > n_max:
@@ -304,7 +366,11 @@ def lambda_handler(event, context):
             id_signo = cfg[0]
 
             valor = float(evento["valor"])
-            id_estado, nivel = clasificar(itemid, valor)
+            id_paciente = int(evento["id_paciente"])
+            # El umbral que el medico definio para este paciente manda sobre el
+            # rango poblacional por defecto.
+            propios = umbrales_de(cur, id_paciente)
+            id_estado, nivel = clasificar(itemid, valor, propios.get(id_signo))
 
             # La lectura SIEMPRE se guarda con su estado real, aunque despues no
             # amerite alerta: el pico sigue viendose en la ficha y en el historico.
