@@ -1,0 +1,12 @@
+# Estado de Terraform (puede contener secretos): nunca versionar.
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Variables con secretos.
+terraform.tfvars
+*.auto.tfvars
+
+# Planes guardados.
+*.tfplan

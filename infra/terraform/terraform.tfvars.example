@@ -1,0 +1,33 @@
+# ==========================================================================
+# Copia a terraform.tfvars y completa. terraform.tfvars NO se versiona (lleva
+# secretos). Los valores por defecto de variables.tf ya reflejan el lab, así
+# que aquí solo va lo específico de tu cuenta y los secretos.
+# ==========================================================================
+
+region  = "us-east-1"
+entorno = "prod"
+
+# --- AWS Academy: descomenta y NO crees roles IAM (usa el LabRole) --------
+# create_iam_roles          = false
+# lambda_execution_role_arn = "arn:aws:iam::<ACCOUNT_ID>:role/LabRole"
+# ec2_instance_profile_name = "LabInstanceProfile"
+
+# --- Correos a suscribir al SNS (cada uno confirma su email) ---------------
+sns_email_subscriptions = [
+  # "medico1@ejemplo.com",
+  # "medico2@ejemplo.com",
+]
+
+# --- Variables de entorno de la Lambda (SECRETOS: no las subas a git) ------
+# SQS_QUEUE_URL se inyecta solo desde el recurso; aquí va el resto.
+lambda_env = {
+  DB_USER         = "ADMIN"
+  DB_DSN          = "bdpulsocaretads_high"
+  WALLET_DIR      = "/var/task/wallet"
+  # DB_PASSWORD   = "..."   # <-- secreto
+  # WALLET_PASSWORD = "..." # <-- secreto
+}
+
+# --- EC2 ------------------------------------------------------------------
+# ec2_key_name             = "mi-keypair"          # opcional, para SSH
+# ec2_cidr_ingreso_gateway = "0.0.0.0/0"           # restríngelo si puedes
