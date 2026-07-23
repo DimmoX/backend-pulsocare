@@ -1,0 +1,509 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  PulsoCare - Infraestructura del backend en AWS (equivalente al Terraform de
+  ../terraform). Declara el hot path completo: Kinesis, Lambda + trigger, SQS +
+  DLQ, SNS, ElastiCache, API Gateway y EC2 x2. Pensado para reconstruir la
+  plataforma en una cuenta AWS real cuando el lab de Academy caduque.
+
+# ==========================================================================
+# PARAMETROS
+# ==========================================================================
+Parameters:
+  Entorno:
+    Type: String
+    Default: prod
+    Description: Nombre del entorno (sufijo y tags).
+
+  # --- IAM ----------------------------------------------------------------
+  CrearRolesIAM:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      true = la plantilla crea los roles IAM (cuenta AWS real).
+      false = AWS Academy; reutiliza el LabRole (rellena los ARNs de abajo).
+
+  LambdaExecutionRoleArn:
+    Type: String
+    Default: ""
+    Description: ARN del rol de la Lambda cuando CrearRolesIAM=false (ej. el LabRole).
+
+  Ec2InstanceProfileName:
+    Type: String
+    Default: ""
+    Description: Instance profile del EC2 cuando CrearRolesIAM=false (ej. LabInstanceProfile).
+
+  # --- Red ----------------------------------------------------------------
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC donde crear SG e instancias.
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Al menos 2 subredes (una por instancia y para ElastiCache).
+
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: AMI de Amazon Linux 2023 (resuelta desde SSM).
+
+  # --- Kinesis ------------------------------------------------------------
+  KinesisStreamName:
+    Type: String
+    Default: pulsocare-signos-vitales
+  KinesisShardCount:
+    Type: Number
+    Default: 1
+  KinesisRetentionHours:
+    Type: Number
+    Default: 24
+
+  # --- SQS ----------------------------------------------------------------
+  SqsQueueName:
+    Type: String
+    Default: pulsocare-alertas
+  SqsMaxReceiveCount:
+    Type: Number
+    Default: 5
+  SqsVisibilityTimeout:
+    Type: Number
+    Default: 30
+
+  # --- SNS: hasta 3 correos opcionales (cada uno confirma su email) -------
+  SnsTopicName:
+    Type: String
+    Default: pulsocare-alertas
+  Email1:
+    Type: String
+    Default: ""
+  Email2:
+    Type: String
+    Default: ""
+  Email3:
+    Type: String
+    Default: ""
+
+  # --- Lambda: el codigo va en S3 (CFN no admite .zip local) --------------
+  LambdaFunctionName:
+    Type: String
+    Default: pulsocare-procesar-signos-vitales
+  LambdaS3Bucket:
+    Type: String
+    Description: Bucket S3 donde subiste funcion.zip y la capa.
+  LambdaS3Key:
+    Type: String
+    Default: lambda/funcion.zip
+  LayerS3Key:
+    Type: String
+    Default: lambda/capa_oracledb_linux.zip
+  LambdaRuntime:
+    Type: String
+    Default: python3.12
+  LambdaTimeout:
+    Type: Number
+    Default: 30
+  LambdaMemory:
+    Type: Number
+    Default: 512
+  LambdaBatchSize:
+    Type: Number
+    Default: 100
+  LambdaDbUser:
+    Type: String
+    Default: ADMIN
+  LambdaDbDsn:
+    Type: String
+    Default: bdpulsocaretads_high
+  LambdaWalletDir:
+    Type: String
+    Default: /var/task/wallet
+  LambdaDbPassword:
+    Type: String
+    Default: ""
+    NoEcho: true
+  LambdaWalletPassword:
+    Type: String
+    Default: ""
+    NoEcho: true
+
+  # --- ElastiCache --------------------------------------------------------
+  ElastiCacheNodeType:
+    Type: String
+    Default: cache.t3.micro
+  ElastiCacheEngineVersion:
+    Type: String
+    Default: "7.1"
+
+  # --- EC2 ----------------------------------------------------------------
+  Ec2InstanceType:
+    Type: String
+    Default: t3.medium
+  Ec2KeyName:
+    Type: String
+    Default: ""
+    Description: Key pair para SSH (vacio = sin acceso SSH).
+  Ec2PuertoGateway:
+    Type: Number
+    Default: 8080
+  Ec2CidrIngreso:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR permitido al puerto del gateway (restringelo si puedes).
+
+# ==========================================================================
+# CONDICIONES
+# ==========================================================================
+Conditions:
+  CrearRoles: !Equals [!Ref CrearRolesIAM, "true"]
+  TieneEmail1: !Not [!Equals [!Ref Email1, ""]]
+  TieneEmail2: !Not [!Equals [!Ref Email2, ""]]
+  TieneEmail3: !Not [!Equals [!Ref Email3, ""]]
+  TieneKey: !Not [!Equals [!Ref Ec2KeyName, ""]]
+
+# ==========================================================================
+# RECURSOS
+# ==========================================================================
+Resources:
+
+  # --- Kinesis ------------------------------------------------------------
+  StreamSignos:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: !Ref KinesisStreamName
+      ShardCount: !Ref KinesisShardCount
+      RetentionPeriodHours: !Ref KinesisRetentionHours
+      StreamModeDetails:
+        StreamMode: PROVISIONED
+      Tags:
+        - { Key: Proyecto, Value: PulsoCare }
+        - { Key: Componente, Value: hot-path-ingesta }
+
+  # --- SQS: cola + DLQ ----------------------------------------------------
+  ColaAlertasDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${SqsQueueName}-dlq"
+      MessageRetentionPeriod: 1209600
+      Tags:
+        - { Key: Proyecto, Value: PulsoCare }
+        - { Key: Componente, Value: hot-path-alertas-dlq }
+
+  ColaAlertas:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Ref SqsQueueName
+      VisibilityTimeout: !Ref SqsVisibilityTimeout
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ColaAlertasDLQ.Arn
+        maxReceiveCount: !Ref SqsMaxReceiveCount
+      Tags:
+        - { Key: Proyecto, Value: PulsoCare }
+        - { Key: Componente, Value: hot-path-alertas }
+
+  # --- SNS: topico + suscripciones ----------------------------------------
+  TopicoAlertas:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Ref SnsTopicName
+      Tags:
+        - { Key: Proyecto, Value: PulsoCare }
+        - { Key: Componente, Value: notificaciones }
+
+  SuscripcionEmail1:
+    Type: AWS::SNS::Subscription
+    Condition: TieneEmail1
+    Properties:
+      TopicArn: !Ref TopicoAlertas
+      Protocol: email
+      Endpoint: !Ref Email1
+  SuscripcionEmail2:
+    Type: AWS::SNS::Subscription
+    Condition: TieneEmail2
+    Properties:
+      TopicArn: !Ref TopicoAlertas
+      Protocol: email
+      Endpoint: !Ref Email2
+  SuscripcionEmail3:
+    Type: AWS::SNS::Subscription
+    Condition: TieneEmail3
+    Properties:
+      TopicArn: !Ref TopicoAlertas
+      Protocol: email
+      Endpoint: !Ref Email3
+
+  # --- IAM: rol de la Lambda (solo si CrearRoles) -------------------------
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Condition: CrearRoles
+    Properties:
+      RoleName: !Sub "${LambdaFunctionName}-rol"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaKinesisExecutionRole
+      Policies:
+        - PolicyName: enviar-a-sqs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [sqs:SendMessage, sqs:GetQueueAttributes, sqs:GetQueueUrl]
+                Resource: !GetAtt ColaAlertas.Arn
+
+  # --- IAM: rol + instance profile del EC2 (solo si CrearRoles) -----------
+  Ec2Role:
+    Type: AWS::IAM::Role
+    Condition: CrearRoles
+    Properties:
+      RoleName: !Sub "pulsocare-ec2-${Entorno}-rol"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: sqs-consumir-sns-publicar
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes]
+                Resource: !GetAtt ColaAlertas.Arn
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref TopicoAlertas
+
+  Ec2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Condition: CrearRoles
+    Properties:
+      InstanceProfileName: !Sub "pulsocare-ec2-${Entorno}-perfil"
+      Roles: [!Ref Ec2Role]
+
+  # --- Lambda: capa + funcion + trigger -----------------------------------
+  CapaOracledb:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: !Sub "${LambdaFunctionName}-oracledb"
+      Description: oracledb + wallet de Oracle Autonomous para la Lambda.
+      CompatibleRuntimes: [!Ref LambdaRuntime]
+      Content:
+        S3Bucket: !Ref LambdaS3Bucket
+        S3Key: !Ref LayerS3Key
+
+  LambdaProcesar:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref LambdaFunctionName
+      Runtime: !Ref LambdaRuntime
+      Handler: lambda_function.lambda_handler
+      Timeout: !Ref LambdaTimeout
+      MemorySize: !Ref LambdaMemory
+      Role: !If [CrearRoles, !GetAtt LambdaRole.Arn, !Ref LambdaExecutionRoleArn]
+      Layers: [!Ref CapaOracledb]
+      Code:
+        S3Bucket: !Ref LambdaS3Bucket
+        S3Key: !Ref LambdaS3Key
+      Environment:
+        Variables:
+          SQS_QUEUE_URL: !Ref ColaAlertas
+          DB_USER: !Ref LambdaDbUser
+          DB_DSN: !Ref LambdaDbDsn
+          WALLET_DIR: !Ref LambdaWalletDir
+          DB_PASSWORD: !Ref LambdaDbPassword
+          WALLET_PASSWORD: !Ref LambdaWalletPassword
+      Tags:
+        - { Key: Proyecto, Value: PulsoCare }
+        - { Key: Componente, Value: hot-path-procesamiento }
+
+  TriggerKinesis:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt StreamSignos.Arn
+      FunctionName: !Ref LambdaProcesar
+      StartingPosition: LATEST
+      BatchSize: !Ref LambdaBatchSize
+      MaximumBatchingWindowInSeconds: 5
+      Enabled: true
+
+  # --- EC2: security groups -----------------------------------------------
+  SgBackend:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Puerta del ms-gateway y salida a Kinesis/SQS/SNS/Oracle.
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: ms-gateway (tras el API Gateway).
+          IpProtocol: tcp
+          FromPort: !Ref Ec2PuertoGateway
+          ToPort: !Ref Ec2PuertoGateway
+          CidrIp: !Ref Ec2CidrIngreso
+      SecurityGroupEgress:
+        - Description: Salida a Oracle Autonomous, Kinesis, SQS y SNS.
+          IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - { Key: Proyecto, Value: PulsoCare }
+        - { Key: Componente, Value: backend }
+
+  SgBackendSsh:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: TieneKey
+    Properties:
+      GroupId: !Ref SgBackend
+      Description: SSH.
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: !Ref Ec2CidrIngreso
+
+  SgRedis:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Acceso a Redis solo desde las instancias del backend.
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: Redis desde el backend (EC2).
+          IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref SgBackend
+      Tags:
+        - { Key: Proyecto, Value: PulsoCare }
+        - { Key: Componente, Value: cache }
+
+  # --- ElastiCache (Redis) ------------------------------------------------
+  RedisSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: Subredes de Redis PulsoCare.
+      SubnetIds: !Ref SubnetIds
+
+  Redis:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupId: !Sub "pulsocare-redis-${Entorno}"
+      ReplicationGroupDescription: Cache de PulsoCare (lecturas y umbrales).
+      Engine: redis
+      EngineVersion: !Ref ElastiCacheEngineVersion
+      CacheNodeType: !Ref ElastiCacheNodeType
+      Port: 6379
+      NumCacheClusters: 1
+      CacheSubnetGroupName: !Ref RedisSubnetGroup
+      SecurityGroupIds: [!GetAtt SgRedis.GroupId]
+      TransitEncryptionEnabled: true
+      AtRestEncryptionEnabled: true
+      Tags:
+        - { Key: Proyecto, Value: PulsoCare }
+        - { Key: Componente, Value: cache }
+
+  # --- EC2: instancias (2, sin count nativo en CFN) -----------------------
+  BackendInstance1:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref Ec2InstanceType
+      SubnetId: !Select [0, !Ref SubnetIds]
+      SecurityGroupIds: [!Ref SgBackend]
+      IamInstanceProfile: !If [CrearRoles, !Ref Ec2InstanceProfile, !Ref Ec2InstanceProfileName]
+      KeyName: !If [TieneKey, !Ref Ec2KeyName, !Ref "AWS::NoValue"]
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -e
+          dnf install -y docker
+          systemctl enable --now docker
+          usermod -aG docker ec2-user
+          curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+      Tags:
+        - { Key: Proyecto, Value: PulsoCare }
+        - { Key: Componente, Value: backend }
+        - { Key: Name, Value: !Sub "pulsocare-backend-${Entorno}-1" }
+
+  BackendInstance2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref Ec2InstanceType
+      SubnetId: !Select [1, !Ref SubnetIds]
+      SecurityGroupIds: [!Ref SgBackend]
+      IamInstanceProfile: !If [CrearRoles, !Ref Ec2InstanceProfile, !Ref Ec2InstanceProfileName]
+      KeyName: !If [TieneKey, !Ref Ec2KeyName, !Ref "AWS::NoValue"]
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -e
+          dnf install -y docker
+          systemctl enable --now docker
+          usermod -aG docker ec2-user
+          curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+      Tags:
+        - { Key: Proyecto, Value: PulsoCare }
+        - { Key: Componente, Value: backend }
+        - { Key: Name, Value: !Sub "pulsocare-backend-${Entorno}-2" }
+
+  # --- API Gateway (HTTP API) ---------------------------------------------
+  ApiBackend:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "pulsocare-backend-${Entorno}"
+      ProtocolType: HTTP
+
+  ApiIntegracion:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ApiBackend
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      IntegrationUri: !Sub "http://${BackendInstance1.PublicDnsName}:${Ec2PuertoGateway}/{proxy}"
+      PayloadFormatVersion: "1.0"
+
+  ApiRuta:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ApiBackend
+      RouteKey: "ANY /{proxy+}"
+      Target: !Sub "integrations/${ApiIntegracion}"
+
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref ApiBackend
+      StageName: $default
+      AutoDeploy: true
+
+# ==========================================================================
+# SALIDAS
+# ==========================================================================
+Outputs:
+  ApiUrl:
+    Description: URL publica del backend (environment.ts del frontend, API_URL del replayer).
+    Value: !Sub "https://${ApiBackend}.execute-api.${AWS::Region}.amazonaws.com"
+  KinesisStreamName:
+    Description: Stream al que publica el replayer (KINESIS_STREAM).
+    Value: !Ref StreamSignos
+  SqsQueueUrl:
+    Description: Cola de alertas (SQS_QUEUE_URL).
+    Value: !Ref ColaAlertas
+  SnsTopicArn:
+    Description: Topico de notificaciones (SNS_TOPIC_ARN).
+    Value: !Ref TopicoAlertas
+  RedisEndpoint:
+    Description: Endpoint primario de Redis (REDIS_HOST).
+    Value: !GetAtt Redis.PrimaryEndPoint.Address
+  Ec2PublicDns:
+    Description: DNS publico de las instancias del backend.
+    Value: !Sub "${BackendInstance1.PublicDnsName}, ${BackendInstance2.PublicDnsName}"
+  LambdaFunctionName:
+    Description: Nombre de la Lambda consumidora.
+    Value: !Ref LambdaProcesar
